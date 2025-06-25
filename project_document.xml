@@ -1,0 +1,817 @@
+<documents>
+<document index="1">
+    <source>architecture\architecture.py</source>
+    <metadata>
+        <size>1518</size>
+        <created>2025-06-24T13:41:11.120389</created>
+        <modified>2025-06-24T13:41:11.120389</modified>
+    </metadata>
+    <references>
+        <imports>
+            <import>from diagrams import Diagram, Cluster, Edge</import>
+            <import>from diagrams.azure.database import SQLServers</import>
+            <import>from diagrams.azure.ml import CognitiveServices</import>
+            <import>from diagrams.programming.language import Python</import>
+            <import>from diagrams.gcp.ml import SpeechToText, TextToSpeech</import>
+            <import>from diagrams.azure.general import Usericon</import>
+            <import>from diagrams.elastic.beats import Filebeat</import>
+
+        </imports>
+        <tables>
+
+        </tables>
+    </references>
+    <sourceCode>
+from diagrams import Diagram, Cluster, Edge
+from diagrams.azure.database import SQLServers
+from diagrams.azure.ml import CognitiveServices
+from diagrams.programming.language import Python
+from diagrams.gcp.ml import SpeechToText, TextToSpeech
+from diagrams.azure.general import Usericon
+from diagrams.elastic.beats import Filebeat
+
+with Diagram(&quot;NLP to SQL Architecture&quot;, show=False):
+    stt = SpeechToText(&quot;Speech to Text&quot;)
+    tts = TextToSpeech(&quot;Text to Speech&quot;)
+    sql_server = SQLServers(&quot;SQL Server&quot;)
+    open_ai = CognitiveServices(&quot;OpenAI&quot;)
+
+    with Cluster(&quot;Orchestrator&quot;):
+        orchestrator = Python(&quot;Orchestrator&quot;)
+        with Cluster(&quot;Semantic Kernel&quot;):
+            semantic_kernel = Python(&quot;Semantic Kernel&quot;)
+            chat_completion = Filebeat(&quot;Chat Completion&quot;)
+
+            with Cluster(&quot;Plugins&quot;):
+                query_db = Python(&quot;Query DB&quot;)
+                nlp_to_sql = Filebeat(&quot;NLP to SQL&quot;)
+
+            semantic_kernel &gt;&gt; Edge(label=&quot;interact with chat&quot;) &lt;&lt; chat_completion
+            semantic_kernel &gt;&gt; Edge(label=&quot;use translated SQL on the database&quot;) &lt;&lt; query_db
+            semantic_kernel &gt;&gt; Edge(label=&quot;translate query to SQL&quot;) &lt;&lt; nlp_to_sql
+            query_db &gt;&gt; Edge() &lt;&lt; sql_server
+            chat_completion &gt;&gt; Edge() &lt;&lt; open_ai
+            nlp_to_sql &gt;&gt; Edge() &lt;&lt; open_ai
+
+        orchestrator &gt;&gt; Edge() &lt;&lt; stt
+        orchestrator &gt;&gt; Edge() &lt;&lt; tts
+        orchestrator &gt;&gt; Edge() &lt;&lt; semantic_kernel
+
+    Usericon() &gt;&gt; Edge(label=&quot;voice request/response&quot;) &lt;&lt; orchestrator
+
+    </sourceCode>
+    <summary>
+        Number of lines: 36
+        Number of imports: 7
+        Number of table references: 0
+    </summary>
+</document>
+<document index="2">
+    <source>src\__init__.py</source>
+    <metadata>
+        <size>0</size>
+        <created>2025-06-24T13:41:11.132391</created>
+        <modified>2025-06-24T13:41:11.132391</modified>
+    </metadata>
+    <references>
+        <imports>
+
+        </imports>
+        <tables>
+
+        </tables>
+    </references>
+    <sourceCode>
+
+    </sourceCode>
+    <summary>
+        Number of lines: 0
+        Number of imports: 0
+        Number of table references: 0
+    </summary>
+</document>
+<document index="3">
+    <source>src\app.py</source>
+    <metadata>
+        <size>1641</size>
+        <created>2025-06-24T13:41:11.132391</created>
+        <modified>2025-06-24T13:41:11.133387</modified>
+    </metadata>
+    <references>
+        <imports>
+            <import>import os</import>
+            <import>import asyncio</import>
+            <import>import logging</import>
+            <import>from dotenv import load_dotenv</import>
+            <import>from azure.identity import DefaultAzureCredential</import>
+            <import>from semantic_kernel.contents.chat_history import ChatHistory</import>
+            <import>from .speech import Speech</import>
+            <import>from .kernel import Kernel</import>
+            <import>from .database import Database</import>
+            <import>from .orchestrator import Orchestrator</import>
+
+        </imports>
+        <tables>
+
+        </tables>
+    </references>
+    <sourceCode>
+import os
+import asyncio
+import logging
+
+from dotenv import load_dotenv
+from azure.identity import DefaultAzureCredential
+from semantic_kernel.contents.chat_history import ChatHistory
+
+
+from .speech import Speech
+from .kernel import Kernel
+from .database import Database
+from .orchestrator import Orchestrator
+
+
+logging.basicConfig(
+    filename=&quot;app.log&quot;,
+    format=&quot;[%(asctime)s - %(name)s:%(lineno)d - %(levelname)s] %(message)s&quot;,
+    datefmt=&quot;%Y-%m-%d %H:%M:%S&quot;,
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+
+
+async def main():
+    load_dotenv()
+
+    credential = DefaultAzureCredential()
+
+    server_name = os.getenv(&quot;SQL_SERVER_NAME&quot;)
+    database_name = os.getenv(&quot;SQL_DATABASE_NAME&quot;)
+    speech_service_id = os.getenv(&quot;SPEECH_SERVICE_ID&quot;)
+    azure_location = os.getenv(&quot;AZURE_LOCATION&quot;)
+    openai_endpoint = os.getenv(&quot;AZURE_OPENAI_ENDPOINT&quot;)
+    openai_deployment_name = os.getenv(&quot;AZURE_OPENAI_CHAT_DEPLOYMENT_NAME&quot;)
+
+    speech_service = Speech(credential=credential, resource_id=speech_service_id, region=azure_location)
+    database_service = Database(server_name=server_name, database_name=database_name, credential=credential)
+
+    # Setup the database
+    database_service.setup()
+
+    kernel = Kernel(database_service=database_service, credential=credential, openai_endpoint=openai_endpoint, openai_deployment_name=openai_deployment_name)
+
+    # Create a history of the conversation
+    chat_history = ChatHistory()
+
+    orchestrator = Orchestrator(speech_service=speech_service, kernel=kernel)
+
+    await orchestrator.run(chat_history=chat_history)
+
+
+if __name__ == &quot;__main__&quot;:
+    asyncio.run(main())
+
+    </sourceCode>
+    <summary>
+        Number of lines: 54
+        Number of imports: 10
+        Number of table references: 0
+    </summary>
+</document>
+<document index="4">
+    <source>src\database\__init__.py</source>
+    <metadata>
+        <size>30</size>
+        <created>2025-06-24T13:41:11.133387</created>
+        <modified>2025-06-24T13:41:11.133387</modified>
+    </metadata>
+    <references>
+        <imports>
+            <import>from .service import Database</import>
+
+        </imports>
+        <tables>
+
+        </tables>
+    </references>
+    <sourceCode>
+from .service import Database
+
+    </sourceCode>
+    <summary>
+        Number of lines: 1
+        Number of imports: 1
+        Number of table references: 0
+    </summary>
+</document>
+<document index="5">
+    <source>src\database\service.py</source>
+    <metadata>
+        <size>2963</size>
+        <created>2025-06-24T13:41:11.134389</created>
+        <modified>2025-06-24T13:41:11.134389</modified>
+    </metadata>
+    <references>
+        <imports>
+            <import>import logging</import>
+            <import>import pyodbc, struct</import>
+            <import>from azure.identity import DefaultAzureCredential</import>
+            <import>from faker import Faker</import>
+            <import>from .utils import table_exists, create_table, insert_record</import>
+
+        </imports>
+        <tables>
+
+        </tables>
+    </references>
+    <sourceCode>
+import logging
+
+import pyodbc, struct
+from azure.identity import DefaultAzureCredential
+from faker import Faker
+
+from .utils import table_exists, create_table, insert_record
+
+
+logger = logging.getLogger(__name__)
+
+scope = &apos;https://database.windows.net/.default&apos;
+
+
+# If you have issues connecting, make sure you have the correct driver installed
+# ODBC Driver for SQL Server - https://learn.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server
+connection_string_template = &apos;DRIVER={driver};SERVER=tcp:{server_name}.database.windows.net,1433;DATABASE={database_name}&apos;
+driver = &apos;ODBC Driver 18 for SQL Server&apos;
+
+
+class Database:
+    def __init__(self, server_name: str, database_name: str, credential: DefaultAzureCredential) -&gt; None:
+        token = credential.get_token(scope).token
+
+        self.conn = get_connection(server_name=server_name, database_name=database_name, token=token)
+
+    def setup(self) -&gt; None:
+        &quot;&quot;&quot;
+        Set up the database by creating the table and inserting fake records.
+        &quot;&quot;&quot;
+        logger.debug(&quot;Setting up the database.&quot;)
+        # Create a cursor object to execute SQL queries
+        cursor = self.conn.cursor()
+
+        if table_exists(cursor):
+            # skip if table already exists
+            return
+
+        logger.debug(&quot;Creating table.&quot;)
+        create_table(cursor)
+
+        # Create Faker object
+        fake = Faker()
+
+        logger.debug(&quot;Generating and inserting records.&quot;)
+        # Generate and insert 1,000 fake records
+        for i in range(1000):
+            insert_record(cursor, i, fake)
+
+        # Commit the changes and close the connection
+        self.conn.commit()
+
+        logger.debug(&quot;Database setup completed.&quot;)
+
+    def query(self, query: str) -&gt; [pyodbc.Row]:
+        &quot;&quot;&quot;
+        Query the database with the given SQL query.
+        &quot;&quot;&quot;
+        cursor = self.conn.cursor()
+        try:
+            logger.debug(&quot;Querying database with: {}.&quot;.format(query))
+            cursor.execute(query)
+            result = cursor.fetchall()
+            logger.debug(&quot;Successfully queried database: {}.&quot;.format(result))
+        except Exception as ex:
+            logger.error(&quot;Error querying database: {}.&quot;.format(ex))
+            return &quot;No Result Found&quot;
+        finally:
+            cursor.close()
+
+        return result
+
+
+def get_connection(server_name: str, database_name: str, token: str) -&gt; pyodbc.Connection:
+    # see https://learn.microsoft.com/en-us/azure/azure-sql/database/azure-sql-python-quickstart
+    token_bytes = token.encode(&quot;UTF-16-LE&quot;)
+    token_struct = struct.pack(f&apos;&lt;I{len(token_bytes)}s&apos;, len(token_bytes), token_bytes)
+    SQL_COPT_SS_ACCESS_TOKEN = 1256  # This connection option is defined by microsoft in msodbcsql.h
+
+    connection_string = connection_string_template.format(driver=driver, server_name=server_name, database_name=database_name)
+    return pyodbc.connect(connection_string, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_struct})
+
+    </sourceCode>
+    <summary>
+        Number of lines: 81
+        Number of imports: 5
+        Number of table references: 0
+    </summary>
+</document>
+<document index="6">
+    <source>src\database\utils.py</source>
+    <metadata>
+        <size>2261</size>
+        <created>2025-06-24T13:41:11.134389</created>
+        <modified>2025-06-24T13:41:11.134389</modified>
+    </metadata>
+    <references>
+        <imports>
+            <import>import pyodbc</import>
+            <import>from faker import Faker</import>
+
+        </imports>
+        <tables>
+            <query>IF (EXISTS (SELECT *</query>
+            <query>FROM INFORMATION_SCHEMA.TABLES</query>
+            <query>SELECT 1 AS res</query>
+            <query>ELSE SELECT 0 AS res;</query>
+
+        </tables>
+    </references>
+    <sourceCode>
+import pyodbc
+from faker import Faker
+
+
+def table_exists(cursor: pyodbc.Cursor) -&gt; int:
+    &quot;&quot;&quot;
+    Check whether the ExplorationProduction table exists in the database.
+    &quot;&quot;&quot;
+    query = &apos;&apos;&apos;
+IF (EXISTS (SELECT * 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_NAME = &apos;ExplorationProduction&apos;))
+    SELECT 1 AS res 
+ELSE SELECT 0 AS res;
+&apos;&apos;&apos;
+
+    cursor.execute(query)
+
+    return cursor.fetchone()[0] == 1
+
+
+def create_table(cursor: pyodbc.Cursor) -&gt; None:
+    &quot;&quot;&quot;
+    Create the ExplorationProduction table in the database.
+    &quot;&quot;&quot;
+    query = &apos;&apos;&apos;
+CREATE TABLE ExplorationProduction (
+    WellID INT PRIMARY KEY,
+    WellName VARCHAR(50),
+    Location VARCHAR(100),
+    ProductionDate DATE,
+    ProductionVolume DECIMAL(10, 2),
+    Operator VARCHAR(50),
+    FieldName VARCHAR(50),
+    Reservoir VARCHAR(50),
+    Depth DECIMAL(10, 2),
+    APIGravity DECIMAL(5, 2),
+    WaterCut DECIMAL(5, 2),
+    GasOilRatio DECIMAL(10, 2)
+);
+&apos;&apos;&apos;
+
+    cursor.execute(query)
+
+
+def insert_record(cursor: pyodbc.Cursor, i: int, fake: Faker) -&gt; None:
+    &quot;&quot;&quot;
+    Insert a fake record into the ExplorationProduction table.g
+    &quot;&quot;&quot;
+    well_id = i + 1
+    well_name = fake.word() + &apos; Well&apos;
+    location = fake.city() + &apos;, &apos; + fake.country()
+    production_date = fake.date_between(start_date=&apos;-1y&apos;, end_date=&apos;today&apos;)
+    production_volume = fake.pydecimal(left_digits=6, right_digits=2, positive=True)
+    operator = fake.company()
+    field_name = fake.word() + &apos; Field&apos;
+    reservoir = fake.word() + &apos; Reservoir&apos;
+    depth = fake.pydecimal(left_digits=5, right_digits=2, positive=True)
+    api_gravity = fake.pydecimal(left_digits=2, right_digits=2, positive=True)
+    water_cut = fake.pydecimal(left_digits=2, right_digits=2)
+    gas_oil_ratio = fake.pydecimal(left_digits=4, right_digits=2)
+
+    query = &apos;&apos;&apos;
+INSERT INTO ExplorationProduction (WellID, WellName, Location, ProductionDate, ProductionVolume, Operator, FieldName, Reservoir, Depth, APIGravity, WaterCut, GasOilRatio) 
+VALUES (?,?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+&apos;&apos;&apos;
+
+    # Insert record into the ExplorationProduction table
+    cursor.execute(query, well_id,well_name, location, production_date, production_volume, operator, field_name, reservoir, depth, api_gravity, water_cut, gas_oil_ratio)
+
+    </sourceCode>
+    <summary>
+        Number of lines: 69
+        Number of imports: 2
+        Number of table references: 4
+    </summary>
+</document>
+<document index="7">
+    <source>src\kernel\__init__.py</source>
+    <metadata>
+        <size>28</size>
+        <created>2025-06-24T13:41:11.135389</created>
+        <modified>2025-06-24T13:41:11.135389</modified>
+    </metadata>
+    <references>
+        <imports>
+            <import>from .service import Kernel</import>
+
+        </imports>
+        <tables>
+
+        </tables>
+    </references>
+    <sourceCode>
+from .service import Kernel
+
+    </sourceCode>
+    <summary>
+        Number of lines: 1
+        Number of imports: 1
+        Number of table references: 0
+    </summary>
+</document>
+<document index="8">
+    <source>src\kernel\service.py</source>
+    <metadata>
+        <size>3111</size>
+        <created>2025-06-24T13:41:11.135389</created>
+        <modified>2025-06-24T13:41:11.136388</modified>
+    </metadata>
+    <references>
+        <imports>
+            <import>import os</import>
+            <import>import logging</import>
+            <import>from azure.identity import DefaultAzureCredential</import>
+            <import>from semantic_kernel import Kernel as SemanticKernel</import>
+            <import>from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion</import>
+            <import>from semantic_kernel.functions import KernelArguments</import>
+            <import>from semantic_kernel.contents.chat_history import ChatHistory</import>
+            <import>from semantic_kernel.connectors.ai.function_call_behavior import FunctionCallBehavior</import>
+            <import>from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_prompt_execution_settings import (</import>
+            <import>from semantic_kernel.contents.author_role import AuthorRole</import>
+            <import>from semantic_kernel.contents.finish_reason import FinishReason</import>
+            <import>from ..database import Database</import>
+
+        </imports>
+        <tables>
+
+        </tables>
+    </references>
+    <sourceCode>
+import os
+import logging
+
+from azure.identity import DefaultAzureCredential
+from semantic_kernel import Kernel as SemanticKernel
+from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
+from semantic_kernel.functions import KernelArguments
+from semantic_kernel.contents.chat_history import ChatHistory
+from semantic_kernel.connectors.ai.function_call_behavior import FunctionCallBehavior
+from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_prompt_execution_settings import (
+    AzureChatPromptExecutionSettings,
+)
+from semantic_kernel.contents.author_role import AuthorRole
+from semantic_kernel.contents.finish_reason import FinishReason
+
+from ..database import Database
+
+
+logger = logging.getLogger(__name__)
+
+# see https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/managed-identity
+scope = &apos;https://cognitiveservices.azure.com/.default&apos;
+
+
+class Kernel:
+    def __init__(self, database_service: Database, credential: DefaultAzureCredential, openai_endpoint: str, openai_deployment_name: str) -&gt; None:
+        # Create a new kernel
+        self.kernel = SemanticKernel()
+        # Create a chat completion service
+        self.chat_completion = AzureChatCompletion(ad_token=credential.get_token(scope).token, endpoint=openai_endpoint, deployment_name=openai_deployment_name)
+
+        # Add Azure OpenAI chat completion
+        self.kernel.add_service(self.chat_completion)
+
+        # Add plugins located under /plugins folder
+        parent_directory = os.path.join(__file__, &quot;../../&quot;)
+        init_args = {
+            &quot;DatabasePlugin&quot;: {
+                &quot;db&quot;: database_service
+            }
+        }
+        self.kernel.add_plugin(parent_directory=parent_directory, plugin_name=&quot;plugins&quot;, class_init_arguments=init_args)
+
+        # Enable automatic function calling
+        self.execution_settings = AzureChatPromptExecutionSettings(tool_choice=&quot;auto&quot;)
+        self.execution_settings.function_call_behavior = FunctionCallBehavior.EnableFunctions(auto_invoke=True, filters={})
+
+    async def message(self, user_input: str, chat_history: ChatHistory) -&gt; str:
+        &quot;&quot;&quot;
+        Send a message to the kernel and get a response.
+        &quot;&quot;&quot;
+        chat_history.add_user_message(user_input)
+        chat_history_count = len(chat_history)
+        response = await self.chat_completion.get_chat_message_contents(
+            chat_history=chat_history,
+            settings=self.execution_settings,
+            kernel=self.kernel,
+            arguments=KernelArguments(),
+        )
+
+        # print assistant/tool actions
+        for message in chat_history[chat_history_count:]:
+            if message.role == AuthorRole.TOOL:
+                for item in message.items:
+                    print(&quot;tool {} called and returned {}&quot;.format(item.name, item.result))
+            elif message.role == AuthorRole.ASSISTANT and message.finish_reason == FinishReason.TOOL_CALLS:
+                for item in message.items:
+                    print(&quot;tool {} needs to be called with parameters {}&quot;.format(item.name, item.arguments))
+
+        return str(response[0])
+
+    </sourceCode>
+    <summary>
+        Number of lines: 70
+        Number of imports: 12
+        Number of table references: 0
+    </summary>
+</document>
+<document index="9">
+    <source>src\orchestrator\__init__.py</source>
+    <metadata>
+        <size>34</size>
+        <created>2025-06-24T13:41:11.136388</created>
+        <modified>2025-06-24T13:41:11.136388</modified>
+    </metadata>
+    <references>
+        <imports>
+            <import>from .service import Orchestrator</import>
+
+        </imports>
+        <tables>
+
+        </tables>
+    </references>
+    <sourceCode>
+from .service import Orchestrator
+
+    </sourceCode>
+    <summary>
+        Number of lines: 1
+        Number of imports: 1
+        Number of table references: 0
+    </summary>
+</document>
+<document index="10">
+    <source>src\orchestrator\service.py</source>
+    <metadata>
+        <size>1947</size>
+        <created>2025-06-24T13:41:11.137389</created>
+        <modified>2025-06-24T13:41:11.137389</modified>
+    </metadata>
+    <references>
+        <imports>
+            <import>import logging</import>
+            <import>from semantic_kernel.contents.chat_history import ChatHistory</import>
+            <import>from ..speech import Speech</import>
+            <import>from ..kernel import Kernel</import>
+
+        </imports>
+        <tables>
+
+        </tables>
+    </references>
+    <sourceCode>
+import logging
+
+from semantic_kernel.contents.chat_history import ChatHistory
+
+from ..speech import Speech
+from ..kernel import Kernel
+
+
+logger = logging.getLogger(__name__)
+
+
+class Orchestrator:
+    def __init__(self, speech_service: Speech, kernel: Kernel) -&gt; None:
+        self.speech_service = speech_service
+        self.kernel = kernel
+
+    async def run(self, chat_history: ChatHistory) -&gt; None:
+        &quot;&quot;&quot;
+        Run the orchestrator
+        &quot;&quot;&quot;
+        self.speech_service.synthesize(&quot;....Welcome to the Kiosk Bot!! I am here to help you with your queries. I am still learning. So, please bear with me.&quot;)
+
+        while True:
+            try:
+                self.speech_service.synthesize(&quot;Please ask your query through the Microphone:&quot;)
+                print(&quot;Listening:&quot;)
+
+                # Collect user input
+                user_input = self.speech_service.recognize()
+                print(&quot;User &gt; &quot; + user_input)
+
+                # Terminate the loop if the user says &quot;exit&quot;
+                if user_input == &quot;exit&quot;:
+                    break
+
+                response = await self.kernel.message(user_input=user_input, chat_history=chat_history)
+
+                print(&quot;Assistant &gt; &quot; + response)
+                self.speech_service.synthesize(response)
+
+                self.speech_service.synthesize(&quot;Do you have any other query? Say Yes to Continue&quot;)
+
+                # Taking Input from the user
+                print(&quot;Listening:&quot;)
+                user_input = self.speech_service.recognize()
+                print(&quot;User &gt; &quot; + user_input)
+                if user_input != &apos;Yes.&apos;:
+                    self.speech_service.synthesize(&quot;Thank you for using the Kiosk Bot. Have a nice day.&quot;)
+                    break
+            except Exception as e:
+                logger.error(&quot;An exception occurred: {}&quot;.format(e))
+                self.speech_service.synthesize(&quot;An error occurred. Let&apos;s try again.&quot;)
+                continue
+
+    </sourceCode>
+    <summary>
+        Number of lines: 53
+        Number of imports: 4
+        Number of table references: 0
+    </summary>
+</document>
+<document index="11">
+    <source>src\plugins\database_plugin.py</source>
+    <metadata>
+        <size>692</size>
+        <created>2025-06-24T13:41:11.140388</created>
+        <modified>2025-06-24T13:41:11.140388</modified>
+    </metadata>
+    <references>
+        <imports>
+            <import>import logging</import>
+            <import>from typing import Annotated, List</import>
+            <import>import pyodbc</import>
+            <import>from semantic_kernel.functions.kernel_function_decorator import kernel_function</import>
+            <import>from src.database.service import Database</import>
+
+        </imports>
+        <tables>
+
+        </tables>
+    </references>
+    <sourceCode>
+import logging
+from typing import Annotated, List
+
+import pyodbc
+from semantic_kernel.functions.kernel_function_decorator import kernel_function
+
+from src.database.service import Database
+
+
+logger = logging.getLogger(__name__)
+
+
+class DatabasePlugin:
+    &quot;&quot;&quot;DatabasePlugin provides a set of functions to access the database.&quot;&quot;&quot;
+
+    def __init__(self, db: Database) -&gt; None:
+        self.db = db
+
+    @kernel_function(name=&quot;query&quot;, description=&quot;Query the database.&quot;)
+    def query(self, query: Annotated[str, &quot;The SQL query&quot;]) -&gt; Annotated[List[pyodbc.Row], &quot;The rows returned&quot;]:
+        logger.info(&quot;Running database plugin with query: {}&quot;.format(query))
+        return self.db.query(query)
+
+    </sourceCode>
+    <summary>
+        Number of lines: 22
+        Number of imports: 5
+        Number of table references: 0
+    </summary>
+</document>
+<document index="12">
+    <source>src\speech\__init__.py</source>
+    <metadata>
+        <size>28</size>
+        <created>2025-06-24T13:41:11.159388</created>
+        <modified>2025-06-24T13:41:11.159388</modified>
+    </metadata>
+    <references>
+        <imports>
+            <import>from .service import Speech</import>
+
+        </imports>
+        <tables>
+
+        </tables>
+    </references>
+    <sourceCode>
+from .service import Speech
+
+    </sourceCode>
+    <summary>
+        Number of lines: 1
+        Number of imports: 1
+        Number of table references: 0
+    </summary>
+</document>
+<document index="13">
+    <source>src\speech\service.py</source>
+    <metadata>
+        <size>2937</size>
+        <created>2025-06-24T13:41:11.159388</created>
+        <modified>2025-06-24T13:41:11.159388</modified>
+    </metadata>
+    <references>
+        <imports>
+            <import>import logging</import>
+            <import>from azure.identity import DefaultAzureCredential</import>
+            <import>from azure.cognitiveservices.speech import SpeechConfig, SpeechRecognizer,SpeechSynthesizer,  ResultReason, CancellationReason</import>
+            <import>from azure.cognitiveservices.speech.audio import AudioConfig, AudioOutputConfig</import>
+
+        </imports>
+        <tables>
+
+        </tables>
+    </references>
+    <sourceCode>
+import logging
+
+from azure.identity import DefaultAzureCredential
+from azure.cognitiveservices.speech import SpeechConfig, SpeechRecognizer,SpeechSynthesizer,  ResultReason, CancellationReason
+from azure.cognitiveservices.speech.audio import AudioConfig, AudioOutputConfig
+
+
+logger = logging.getLogger(__name__)
+
+# see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-configure-azure-ad-auth?tabs=portal&amp;pivots=programming-language-python#get-a-microsoft-entra-access-token
+scope = &apos;https://cognitiveservices.azure.com/.default&apos;
+
+
+class Speech:
+    def __init__(self, credential: DefaultAzureCredential, resource_id: str, region: str) -&gt; None:
+        auth_token = &apos;aad#{}#{}&apos;.format(resource_id, credential.get_token(scope).token)
+        speech_config = SpeechConfig(auth_token=auth_token, region=region, speech_recognition_language=&quot;en-US&quot;)
+
+        self._recognizer = SpeechRecognizer(speech_config=speech_config, audio_config=AudioConfig(use_default_microphone=True))
+        self._synthesizer = SpeechSynthesizer(speech_config=speech_config, audio_config=AudioOutputConfig(use_default_speaker=True))
+
+    def recognize(self) -&gt; str:
+        &quot;&quot;&quot;
+        Recognize speech from the microphone and convert it to text
+        &quot;&quot;&quot;
+        response = self._recognizer.recognize_once()
+
+        reason = response.reason
+        if reason != ResultReason.RecognizedSpeech:
+            error = &apos;Failed to recognize speech.&apos;
+            if reason == ResultReason.NoMatch:
+                error = &quot;No speech could be recognized: {}&quot;.format(response.no_match_details)
+            elif reason == ResultReason.Canceled:
+                cancellation_details = response.cancellation_details
+                error = &quot;Speech Recognition canceled: {}&quot;.format(cancellation_details.reason)
+                if cancellation_details.reason == CancellationReason.Error:
+                    error += &quot;Error details: {}&quot;.format(cancellation_details.error_details)
+            raise Exception(&quot;Speech recognition failed with error: {}&quot;.format(error))
+
+        logger.info(&quot;Recognized text: {}&quot;.format(response.text))
+
+        return response.text
+
+    def synthesize(self, text: str) -&gt; None:
+        &quot;&quot;&quot;
+        Synthesize text to speech and play it through the speaker
+        &quot;&quot;&quot;
+        response = self._synthesizer.speak_text(text)
+
+        if response.reason != ResultReason.SynthesizingAudioCompleted:
+            cancellation_details = response.cancellation_details
+            error = &quot;Speech synthesis canceled: {}&quot;.format(cancellation_details.reason)
+            if cancellation_details.reason == CancellationReason.Error:
+                if cancellation_details.error_details:
+                    error += &quot;Error details: {}&quot;.format(cancellation_details.error_details)
+            raise Exception(&quot;Speech synthesis failed with error: {}&quot;.format(error))
+
+        logger.info(&quot;Speech synthesized for text [{}]&quot;.format(text))
+
+    </sourceCode>
+    <summary>
+        Number of lines: 58
+        Number of imports: 4
+        Number of table references: 0
+    </summary>
+</document></documents>
