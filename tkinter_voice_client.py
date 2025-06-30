@@ -1,4 +1,4 @@
-# Enhanced tkinter_voice_client.py - With Command History
+# tkinter_voice_client.py - GUI Voice SQL Client
 import os
 import sys
 import json
@@ -47,11 +47,6 @@ class VoiceClientGUI:
         self.server_url = os.getenv("VOICE_SQL_SERVER", "http://BI-SQL001:8000").rstrip('/')
         self.session = requests.Session()
         self.session.timeout = 30
-
-        # Command history
-        self.command_history = []
-        self.history_index = -1
-        self.current_input = ""
 
         # Speech components
         self.tts_engine = None
@@ -143,7 +138,7 @@ class VoiceClientGUI:
         """Create the top toolbar"""
         toolbar = ttk.Frame(parent)
         toolbar.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-        toolbar.columnconfigure(4, weight=1)
+        toolbar.columnconfigure(3, weight=1)
 
         # Mode buttons
         self.text_mode_btn = ttk.Button(toolbar, text="📝 Text Mode", command=self.set_text_mode)
@@ -152,16 +147,12 @@ class VoiceClientGUI:
         self.voice_mode_btn = ttk.Button(toolbar, text="🎤 Voice Mode", command=self.set_voice_mode)
         self.voice_mode_btn.grid(row=0, column=1, padx=(0, 5))
 
-        # Help button
-        ttk.Button(toolbar, text="🚀 Getting Started", command=self.show_getting_started).grid(row=0, column=2,
-                                                                                              padx=(0, 5))
-
         # Settings button
-        ttk.Button(toolbar, text="⚙️ Settings", command=self.show_settings).grid(row=0, column=3, padx=(0, 10))
+        ttk.Button(toolbar, text="⚙️ Settings", command=self.show_settings).grid(row=0, column=2, padx=(0, 10))
 
         # Connection status
         self.connection_label = ttk.Label(toolbar, text="🔴 Disconnected")
-        self.connection_label.grid(row=0, column=5, sticky=tk.E)
+        self.connection_label.grid(row=0, column=4, sticky=tk.E)
 
     def create_chat_area(self, parent):
         """Create the chat history area"""
@@ -200,36 +191,27 @@ class VoiceClientGUI:
         self.chat_display.bind("<Button-3>", self.show_chat_context_menu)
 
     def create_input_area(self, parent):
-        """Create the input area with command history"""
+        """Create the input area"""
         input_frame = ttk.LabelFrame(parent, text="Input", padding="5")
         input_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
         input_frame.columnconfigure(0, weight=1)
 
-        # Text input with history navigation
+        # Text input
         text_input_frame = ttk.Frame(input_frame)
         text_input_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
         text_input_frame.columnconfigure(0, weight=1)
 
         self.input_entry = ttk.Entry(text_input_frame, font=('Consolas', 10))
         self.input_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
-
-        # Bind keys for command history and sending
         self.input_entry.bind('<Return>', self.send_message)
         self.input_entry.bind('<Control-Return>', self.send_message)
-        self.input_entry.bind('<Up>', self.history_up)
-        self.input_entry.bind('<Down>', self.history_down)
-        self.input_entry.bind('<KeyPress>', self.on_key_press)
 
         self.send_btn = ttk.Button(text_input_frame, text="Send", command=self.send_message)
         self.send_btn.grid(row=0, column=1)
 
-        # History info label
-        self.history_label = ttk.Label(text_input_frame, text="↑↓ arrows for history", font=('Segoe UI', 8))
-        self.history_label.grid(row=1, column=0, sticky=tk.W, pady=(2, 0))
-
         # Voice controls
         voice_frame = ttk.Frame(input_frame)
-        voice_frame.grid(row=2, column=0, sticky=(tk.W, tk.E))
+        voice_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
 
         self.voice_btn = ttk.Button(voice_frame, text="🎤 Start Voice Input", command=self.toggle_voice_input)
         self.voice_btn.grid(row=0, column=0, padx=(0, 5))
@@ -243,57 +225,6 @@ class VoiceClientGUI:
         # Voice status
         self.voice_status = ttk.Label(voice_frame, text="Ready")
         self.voice_status.grid(row=0, column=3, sticky=tk.W)
-
-    def on_key_press(self, event):
-        """Handle key press events (reset history navigation)"""
-        if event.keysym not in ['Up', 'Down']:
-            self.history_index = -1
-
-    def history_up(self, event):
-        """Navigate up in command history"""
-        if not self.command_history:
-            return "break"
-
-        # Save current input if we're at the bottom
-        if self.history_index == -1:
-            self.current_input = self.input_entry.get()
-
-        # Move up in history
-        if self.history_index < len(self.command_history) - 1:
-            self.history_index += 1
-            command = self.command_history[-(self.history_index + 1)]
-            self.input_entry.delete(0, tk.END)
-            self.input_entry.insert(0, command)
-
-        return "break"
-
-    def history_down(self, event):
-        """Navigate down in command history"""
-        if not self.command_history:
-            return "break"
-
-        if self.history_index > 0:
-            self.history_index -= 1
-            command = self.command_history[-(self.history_index + 1)]
-            self.input_entry.delete(0, tk.END)
-            self.input_entry.insert(0, command)
-        elif self.history_index == 0:
-            # Return to current input
-            self.history_index = -1
-            self.input_entry.delete(0, tk.END)
-            self.input_entry.insert(0, self.current_input)
-
-        return "break"
-
-    def add_to_history(self, command):
-        """Add command to history"""
-        if command.strip() and (not self.command_history or self.command_history[-1] != command):
-            self.command_history.append(command)
-            # Keep only last 50 commands
-            if len(self.command_history) > 50:
-                self.command_history.pop(0)
-        self.history_index = -1
-        self.current_input = ""
 
     def create_status_bar(self, parent):
         """Create the status bar"""
@@ -315,12 +246,7 @@ class VoiceClientGUI:
         if speech_error and not capabilities:
             caps_text += f" ({speech_error.split('|')[0]})"
 
-        # Add history count
-        history_text = f"History: {len(self.command_history)} commands"
-
-        ttk.Label(status_frame, text=caps_text).grid(row=0, column=1, sticky=tk.E, padx=(0, 10))
-        self.history_status = ttk.Label(status_frame, text=history_text)
-        self.history_status.grid(row=0, column=2, sticky=tk.E)
+        ttk.Label(status_frame, text=caps_text).grid(row=0, column=1, sticky=tk.E)
 
     def update_speech_status(self):
         """Update the visual state based on speech availability"""
@@ -380,10 +306,6 @@ class VoiceClientGUI:
         message = self.input_entry.get().strip()
         if not message:
             return
-
-        # Add to command history
-        self.add_to_history(message)
-        self.history_status.config(text=f"History: {len(self.command_history)} commands")
 
         self.input_entry.delete(0, tk.END)
         self.log_message(message, "user")
@@ -488,11 +410,10 @@ class VoiceClientGUI:
                 self.root.after(0, lambda: self.voice_status.config(text="Processing..."))
                 text = self.recognizer.recognize_google(audio)
 
-                # Put text in input field and reset history
+                # Put text in input field
                 self.root.after(0, lambda: self.input_entry.delete(0, tk.END))
                 self.root.after(0, lambda: self.input_entry.insert(0, text))
                 self.root.after(0, lambda: self.log_message(f"Voice recognized: {text}", "system"))
-                self.history_index = -1  # Reset history navigation
 
             except sr.WaitTimeoutError:
                 self.root.after(0, lambda: self.log_message("Voice timeout - no speech detected", "system"))
@@ -540,100 +461,6 @@ class VoiceClientGUI:
         else:
             self.log_message("Voice input not available", "error")
 
-    def show_getting_started(self):
-        """Show getting started guide"""
-        help_window = tk.Toplevel(self.root)
-        help_window.title("Getting Started - Voice SQL Client")
-        help_window.geometry("700x600")
-        help_window.resizable(True, True)
-        help_window.transient(self.root)
-        help_window.grab_set()
-
-        # Center the window
-        help_window.geometry("+%d+%d" % (
-            self.root.winfo_rootx() + 50,
-            self.root.winfo_rooty() + 20
-        ))
-
-        # Create notebook for different help sections
-        notebook = ttk.Notebook(help_window)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        # Quick Start Tab
-        quick_start_frame = ttk.Frame(notebook)
-        notebook.add(quick_start_frame, text="🚀 Quick Start")
-
-        quick_start_text = scrolledtext.ScrolledText(quick_start_frame, wrap=tk.WORD, font=('Segoe UI', 10))
-        quick_start_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        quick_start_content = """🎯 VOICE SQL CLIENT - QUICK START GUIDE
-
-🔥 Welcome to the future of database querying! This tool lets you talk to your database in plain English.
-
-📝 GETTING STARTED:
-
-1. CONNECTION STATUS
-   • Look for 🟢 Connected in the top-right corner
-   • If you see 🔴 Disconnected, check with IT support
-
-2. CHOOSE YOUR INPUT MODE:
-
-   📝 TEXT MODE (Best for):
-   • OE Numbers: "Show details for OE12345678" 
-   • Part Numbers: "Find information about part ABC123"
-   • Precise searches: "Records where year = 2024"
-
-   🎤 VOICE MODE (Best for):
-   • Natural questions: "How many wells are producing?"
-   • Exploration: "What's the newest data we have?"
-   • Quick queries: "Show me top suppliers"
-
-3. COMMAND HISTORY:
-   • Use ↑ and ↓ arrows to navigate previous commands
-   • Perfect for modifying queries: "ebay WT" → "ebaywt"
-   • Saves your last 50 commands automatically
-
-4. SAMPLE QUERIES TO TRY:
-
-   Database Overview:
-   • "How many tables are in the database?"
-   • "What's the newest capture date?"
-   • "How many records are in ebaywt?"
-
-   Supplier Information:
-   • "What suppliers make OE number 4806802070?"
-   • "Show me all suppliers for Honda parts"
-   • "Which supplier has the most parts?"
-
-   Product Lookups:
-   • "Find details for OEAN 1234567890"
-   • "Show me parts for 2020 Honda Civic"
-   • "What's the price for part number ABC123?"
-
-5. TIPS FOR SUCCESS:
-   • Start broad, then get specific
-   • Use table names if you know them (ebaywt, Suppliers, etc.)
-   • Switch modes as needed - no penalty!
-   • Use ↑ arrow to recall and edit previous queries
-   • Copy important results for your reports
-
-💡 PRO TIPS:
-• The AI remembers your conversation - you can refer back to previous answers
-• If voice doesn't understand, just switch to text mode
-• Right-click in the chat area to copy responses
-• Use the 🔊 button to re-hear the last response
-• Command history makes it easy to refine your queries
-"""
-
-        quick_start_text.insert(tk.END, quick_start_content)
-        quick_start_text.config(state=tk.DISABLED)
-
-        # Close button
-        button_frame = ttk.Frame(help_window)
-        button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-
-        ttk.Button(button_frame, text="Close", command=help_window.destroy).pack(side=tk.RIGHT)
-
     def show_settings(self):
         """Show settings dialog"""
         settings_window = tk.Toplevel(self.root)
@@ -661,20 +488,6 @@ class VoiceClientGUI:
             text="Auto-speak responses",
             variable=self.auto_speak_responses
         ).pack(anchor=tk.W, pady=5)
-
-        # History settings
-        history_frame = ttk.Frame(notebook)
-        notebook.add(history_frame, text="History")
-
-        ttk.Label(history_frame, text=f"Commands in history: {len(self.command_history)}").pack(anchor=tk.W, pady=5)
-
-        def clear_history():
-            self.command_history.clear()
-            self.history_index = -1
-            self.history_status.config(text="History: 0 commands")
-            messagebox.showinfo("History Cleared", "Command history has been cleared.")
-
-        ttk.Button(history_frame, text="Clear Command History", command=clear_history).pack(anchor=tk.W, pady=5)
 
         # Server settings
         server_frame = ttk.Frame(notebook)
@@ -727,7 +540,320 @@ class VoiceClientGUI:
             self.chat_display.config(state=tk.DISABLED)
             self.log_message("Chat history cleared", "system")
 
+    def create_input_area(self, parent):
+        """Create the input area with download options"""
+        input_frame = ttk.LabelFrame(parent, text="Input", padding="5")
+        input_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        input_frame.columnconfigure(0, weight=1)
 
+        # Text input frame
+        text_input_frame = ttk.Frame(input_frame)
+        text_input_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        text_input_frame.columnconfigure(0, weight=1)
+
+        self.input_entry = ttk.Entry(text_input_frame, font=('Consolas', 10))
+        self.input_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+        self.input_entry.bind('<Return>', self.send_message)
+
+        # Send button with dropdown for export options
+        send_frame = ttk.Frame(text_input_frame)
+        send_frame.grid(row=0, column=1)
+
+        self.send_btn = ttk.Button(send_frame, text="Send", command=self.send_message)
+        self.send_btn.grid(row=0, column=0, padx=(0, 2))
+
+        # Export options dropdown
+        self.export_var = tk.StringVar(value="Display")
+        export_menu = ttk.Combobox(send_frame, textvariable=self.export_var, width=8,
+                                   values=["Display", "Export CSV", "Export TXT"], state="readonly")
+        export_menu.grid(row=0, column=1)
+
+        # Downloads and file management
+        download_frame = ttk.Frame(input_frame)
+        download_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
+
+        ttk.Button(download_frame, text="📁 View Downloads", command=self.show_downloads).grid(row=0, column=0,
+                                                                                              padx=(0, 5))
+        ttk.Button(download_frame, text="📊 Table Sizes", command=self.show_table_sizes).grid(row=0, column=1,
+                                                                                             padx=(0, 5))
+
+        # Voice controls (existing code)
+        voice_frame = ttk.Frame(input_frame)
+        voice_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
+
+        # ... rest of existing voice controls ...
+
+    def send_message(self, event=None):
+        """Enhanced send message with export handling"""
+        message = self.input_entry.get().strip()
+        if not message:
+            return
+
+        self.input_entry.delete(0, tk.END)
+        self.log_message(message, "user")
+
+        # Check for exit
+        if message.lower() in ['exit', 'quit', 'goodbye']:
+            self.root.quit()
+            return
+
+        # Determine if this should be an export
+        export_format = None
+        if self.export_var.get() == "Export CSV":
+            export_format = "csv"
+            message += " Please export the results to CSV format."
+        elif self.export_var.get() == "Export TXT":
+            export_format = "txt"
+            message += " Please export the results to TXT format."
+
+        # Reset export selection
+        self.export_var.set("Display")
+
+        # Send to server in background
+        threading.Thread(target=self.query_server_enhanced, args=(message, export_format), daemon=True).start()
+
+    def query_server_enhanced(self, question, export_format=None):
+        """Enhanced query with export handling"""
+        try:
+            self.root.after(0, lambda: self.status_label.config(text="Processing query..."))
+
+            payload = {"question": question}
+            if export_format:
+                payload["export_format"] = export_format
+
+            response = self.session.post(
+                f"{self.server_url}/ask",
+                json=payload,
+                headers={"Content-Type": "application/json"}
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                answer = data.get("answer", "No answer received")
+
+                # Check if this was an export operation
+                if "Exported" in answer and "rows to:" in answer:
+                    self.root.after(0, lambda: self.handle_export_response(answer))
+                else:
+                    self.root.after(0, lambda: self.handle_response(answer))
+            else:
+                error_msg = f"Server error: {response.status_code} - {response.text}"
+                self.root.after(0, lambda: self.log_message(error_msg, "error"))
+
+        except requests.exceptions.ConnectionError:
+            self.root.after(0, lambda: self.log_message("Cannot connect to server. Is it running?", "error"))
+        except Exception as e:
+            self.root.after(0, lambda: self.log_message(f"Error: {e}", "error"))
+        finally:
+            self.root.after(0, lambda: self.status_label.config(text="Ready"))
+
+    def handle_export_response(self, response):
+        """Handle export completion response"""
+        self.log_message(response, "assistant")
+
+        # Extract filename if possible
+        if "rows to:" in response:
+            try:
+                filename = response.split("rows to: ")[1].strip()
+                filename = Path(filename).name  # Get just the filename
+
+                # Show download option
+                download_msg = f"\n🔽 File ready for download: {filename}"
+                self.log_message(download_msg, "system")
+
+                # Auto-refresh downloads
+                self.refresh_downloads_silently()
+
+            except Exception as e:
+                logger.error(f"Error parsing export response: {e}")
+
+    def show_downloads(self):
+        """Show available downloads window"""
+        download_window = tk.Toplevel(self.root)
+        download_window.title("Available Downloads")
+        download_window.geometry("600x400")
+        download_window.transient(self.root)
+
+        # Downloads list
+        frame = ttk.Frame(download_window)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Treeview for file list
+        columns = ("filename", "size_mb", "created")
+        tree = ttk.Treeview(frame, columns=columns, show="headings", height=10)
+
+        tree.heading("filename", text="File Name")
+        tree.heading("size_mb", text="Size (MB)")
+        tree.heading("created", text="Created")
+
+        tree.column("filename", width=300)
+        tree.column("size_mb", width=100)
+        tree.column("created", width=150)
+
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Buttons
+        button_frame = ttk.Frame(download_window)
+        button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        def download_selected():
+            selection = tree.selection()
+            if not selection:
+                messagebox.showwarning("No Selection", "Please select a file to download")
+                return
+
+            item = tree.item(selection[0])
+            filename = item['values'][0]
+            self.download_file(filename)
+
+        def delete_selected():
+            selection = tree.selection()
+            if not selection:
+                messagebox.showwarning("No Selection", "Please select a file to delete")
+                return
+
+            item = tree.item(selection[0])
+            filename = item['values'][0]
+
+            if messagebox.askyesno("Confirm Delete", f"Delete {filename}?"):
+                self.delete_file(filename)
+                refresh_list()
+
+        def refresh_list():
+            # Clear existing items
+            for item in tree.get_children():
+                tree.delete(item)
+
+            # Get updated file list
+            try:
+                response = self.session.get(f"{self.server_url}/exports")
+                if response.status_code == 200:
+                    data = response.json()
+                    for export in data.get('exports', []):
+                        created_time = datetime.fromtimestamp(export['created']).strftime("%Y-%m-%d %H:%M")
+                        tree.insert("", tk.END, values=(
+                            export['filename'],
+                            export['size_mb'],
+                            created_time
+                        ))
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load file list: {e}")
+
+        ttk.Button(button_frame, text="Download", command=download_selected).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="Delete", command=delete_selected).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="Refresh", command=refresh_list).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="Close", command=download_window.destroy).pack(side=tk.RIGHT)
+
+        # Load initial file list
+        refresh_list()
+
+    def download_file(self, filename):
+        """Download a file from the server"""
+        try:
+            # Ask user where to save
+            save_path = filedialog.asksaveasfilename(
+                defaultextension=Path(filename).suffix,
+                filetypes=[("All Files", "*.*")],
+                initialvalue=filename
+            )
+
+            if not save_path:
+                return
+
+            # Download the file
+            response = self.session.get(f"{self.server_url}/download/{filename}")
+            if response.status_code == 200:
+                with open(save_path, 'wb') as f:
+                    f.write(response.content)
+
+                messagebox.showinfo("Download Complete", f"File saved to:\n{save_path}")
+
+                # Ask if user wants to open the file
+                if messagebox.askyesno("Open File", "Open the downloaded file?"):
+                    try:
+                        os.startfile(save_path)  # Windows
+                    except:
+                        webbrowser.open(f"file://{save_path}")  # Cross-platform fallback
+            else:
+                messagebox.showerror("Download Failed", f"Failed to download file: {response.text}")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Download error: {e}")
+
+    def delete_file(self, filename):
+        """Delete a file from the server"""
+        try:
+            response = self.session.delete(f"{self.server_url}/exports/{filename}")
+            if response.status_code == 200:
+                messagebox.showinfo("Success", f"File {filename} deleted")
+            else:
+                messagebox.showerror("Error", f"Failed to delete file: {response.text}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Delete error: {e}")
+
+    def refresh_downloads_silently(self):
+        """Refresh download count without showing window"""
+        try:
+            response = self.session.get(f"{self.server_url}/exports")
+            if response.status_code == 200:
+                data = response.json()
+                count = data.get('count', 0)
+                # Could update a status indicator here
+        except:
+            pass  # Silent refresh
+
+    def show_table_sizes(self):
+        """Show table sizes to help users understand data volumes"""
+
+        def get_sizes():
+            tables = ["ebayWT", "ebayWT_NF", "ebayNF_SupplierMatch"]
+            sizes = {}
+
+            for table in tables:
+                try:
+                    response = self.session.post(
+                        f"{self.server_url}/ask",
+                        json={"question": f"What is the size of table {table}?"}
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        sizes[table] = data.get("answer", "Unknown")
+                except:
+                    sizes[table] = "Error getting size"
+
+            # Display results
+            self.root.after(0, lambda: self.show_sizes_window(sizes))
+
+        threading.Thread(target=get_sizes, daemon=True).start()
+
+    def show_sizes_window(self, sizes):
+        """Display table sizes in a window"""
+        size_window = tk.Toplevel(self.root)
+        size_window.title("Table Sizes")
+        size_window.geometry("400x300")
+        size_window.transient(self.root)
+
+        text_widget = tk.Text(size_window, wrap=tk.WORD, padx=10, pady=10)
+        text_widget.pack(fill=tk.BOTH, expand=True)
+
+        content = "📊 Database Table Sizes\n" + "=" * 30 + "\n\n"
+        for table, size_info in sizes.items():
+            content += f"🗃️ {table}:\n   {size_info}\n\n"
+
+        content += "\n💡 Tips:\n"
+        content += "• Use 'TOP 100' for large tables\n"
+        content += "• Add WHERE conditions to filter data\n"
+        content += "• Use 'Export CSV' for large result sets\n"
+
+        text_widget.insert(tk.END, content)
+        text_widget.config(state=tk.DISABLED)
+
+        ttk.Button(size_window, text="Close", command=size_window.destroy).pack(pady=10)
 def main():
     """Main entry point"""
     # Create the main window
@@ -745,7 +871,6 @@ def main():
     # Welcome message
     app.log_message("Voice SQL Client started", "system")
     app.log_message("Type your questions or use voice input to query the database", "system")
-    app.log_message("Use ↑↓ arrows to navigate command history", "system")
     app.log_message("Examples: 'How many wells?', 'Show OE12345678', 'Top 5 operators'", "system")
 
     # Focus on input
