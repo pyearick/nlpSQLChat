@@ -1,4 +1,4 @@
-# Enhanced database_plugin.py with large result detection and file export
+# Fixed database_plugin.py export methods
 
 import logging
 import csv
@@ -72,28 +72,62 @@ class DatabasePlugin:
             if isinstance(result, str):
                 return f"Error executing query for export: {result}"
 
+            if not result:
+                return f"Query executed successfully but returned no data to export."
+
+            # Get column information from the first row
+            if hasattr(result[0], 'cursor_description') and result[0].cursor_description:
+                # Get column names from cursor description
+                column_names = [desc[0] for desc in result[0].cursor_description]
+            else:
+                # Fallback: try to get column count and create generic names
+                try:
+                    first_row = result[0]
+                    column_count = len(first_row)
+                    column_names = [f"Column_{i + 1}" for i in range(column_count)]
+                except:
+                    column_names = ["Data"]
+
             if file_format.lower() == 'csv':
                 with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
-                    if result:
-                        # Get column names from the first row
-                        writer = csv.writer(csvfile)
+                    writer = csv.writer(csvfile)
 
-                        # Write headers (assuming pyodbc.Row objects)
-                        if hasattr(result[0], 'cursor_description'):
-                            headers = [desc[0] for desc in result[0].cursor_description]
-                            writer.writerow(headers)
+                    # Write headers
+                    writer.writerow(column_names)
 
-                        # Write data rows
-                        for row in result:
-                            writer.writerow([str(cell) if cell is not None else '' for cell in row])
+                    # Write data rows
+                    for row in result:
+                        # Convert row to list of values, handling different row types
+                        if hasattr(row, '__iter__') and not isinstance(row, (str, bytes)):
+                            # Row is iterable (list, tuple, or pyodbc.Row)
+                            row_values = [str(cell) if cell is not None else '' for cell in row]
+                        else:
+                            # Single value
+                            row_values = [str(row) if row is not None else '']
+                        writer.writerow(row_values)
 
             elif file_format.lower() == 'txt':
                 with open(filepath, 'w', encoding='utf-8') as txtfile:
-                    for row in result:
-                        txtfile.write('\t'.join([str(cell) if cell is not None else '' for cell in row]) + '\n')
+                    # Write headers
+                    txtfile.write('\t'.join(column_names) + '\n')
 
-            row_count = len(result) if result else 0
-            return f"✅ Exported {row_count:,} rows to: {filepath}"
+                    # Write data rows
+                    for row in result:
+                        # Convert row to list of values, handling different row types
+                        if hasattr(row, '__iter__') and not isinstance(row, (str, bytes)):
+                            # Row is iterable (list, tuple, or pyodbc.Row)
+                            row_values = [str(cell) if cell is not None else '' for cell in row]
+                        else:
+                            # Single value
+                            row_values = [str(row) if row is not None else '']
+                        txtfile.write('\t'.join(row_values) + '\n')
+
+            row_count = len(result)
+
+            # Return a download-ready message
+            return (f"✅ Exported {row_count:,} rows to {file_format.upper()} format. "
+                    f"File: {filename} "
+                    f"Ready for download from server.")
 
         except Exception as e:
             logger.error(f"Export failed: {e}")
@@ -140,7 +174,7 @@ class DatabasePlugin:
                 logger.warning(error_msg)
                 return error_msg
 
-        # Check for potentially large queries
+        # Check for potentially large queries BEFORE executing
         estimated_rows = self._estimate_row_count(query)
 
         if estimated_rows > self.max_display_rows:
@@ -154,7 +188,7 @@ class DatabasePlugin:
         # Execute the query
         result = self.db.query(query)
 
-        # Check result size even if estimation failed
+        # Check actual result size even if estimation failed
         if isinstance(result, list) and len(result) > self.max_display_rows:
             return (f"⚠️ Query returned {len(result):,} rows (showing first {self.max_display_rows}):\n\n" +
                     str(result[:self.max_display_rows]) +

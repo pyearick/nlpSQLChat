@@ -1,12 +1,14 @@
-# server_api.py - Production version for Windows Task Scheduler
+# server_api.py - Fixed imports and model definitions
+
 import os
 import sys
 import asyncio
 import logging
-import signal
 import time
 from pathlib import Path
+from typing import Optional  # <-- ADD THIS IMPORT
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from azure.identity import DefaultAzureCredential
@@ -18,15 +20,11 @@ from src.kernel import Kernel
 from src.orchestrator import Orchestrator
 from src.database.secure_service import create_database_service, get_database_credentials, SecureDatabase
 
-# Additional endpoints to add to server_api.py
-
-from fastapi import HTTPException
-from fastapi.responses import FileResponse
-from pathlib import Path
-import os
+# Load environment variables FIRST
+load_dotenv()
 
 
-# Configure logging for production service
+# Configure logging
 def setup_production_logging():
     """Setup logging for Windows service environment"""
 
@@ -44,7 +42,7 @@ def setup_production_logging():
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
             logging.FileHandler(log_file, mode='a'),
-            logging.StreamHandler(sys.stdout)  # Also log to console for Task Scheduler
+            logging.StreamHandler(sys.stdout)
         ]
     )
 
@@ -72,8 +70,10 @@ chat_history = None
 shutdown_requested = False
 
 
+# Fixed model definitions with proper imports
 class QueryRequest(BaseModel):
     question: str
+    export_format: Optional[str] = None  # 'csv', 'txt', or None for display
 
 
 class QueryResponse(BaseModel):
@@ -88,7 +88,6 @@ def load_environment_config():
     env_paths = [
         Path(".env"),  # Current directory
         Path(__file__).parent / ".env",  # Script directory
-        Path("C:/VoiceSQL/.env"),  # Absolute path if needed
     ]
 
     env_loaded = False
@@ -337,15 +336,22 @@ async def health_check():
 
 @app.post("/ask")
 async def ask_question(request: QueryRequest) -> QueryResponse:
-    """Process a natural language question"""
+    """Process a natural language question with optional export"""
     try:
         if not kernel:
             raise HTTPException(status_code=503, detail="Service not initialized")
 
         logger.info(f"Processing question: {request.question}")
 
+        # If user specifically requested export, modify the question
+        if request.export_format:
+            export_instruction = f" Please export the results to {request.export_format} format."
+            enhanced_question = request.question + export_instruction
+        else:
+            enhanced_question = request.question
+
         # Process the question through the kernel
-        response = await kernel.message(request.question, chat_history)
+        response = await kernel.message(enhanced_question, chat_history)
 
         logger.info("Response generated successfully")
 
@@ -392,141 +398,99 @@ async def get_detailed_status():
         logger.error(f"Status check failed: {e}")
         raise HTTPException(status_code=500, detail="Status check failed")
 
+    @app.get("/exports")
+    async def list_exports():
+        """List available export files"""
+        try:
+            export_dir = Path("C:/Logs/VoiceSQL/exports")
+            if not export_dir.exists():
+                return {"exports": [], "message": "No exports directory found"}
 
-# Add these endpoints to your existing server_api.py
+            exports = []
+            for file in export_dir.glob("*.csv"):
+                stat = file.stat()
+                exports.append({
+                    "filename": file.name,
+                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                    "created": stat.st_ctime,
+                    "download_url": f"/download/{file.name}"
+                })
 
-@app.get("/exports")
-async def list_exports():
-    """List available export files"""
-    try:
-        export_dir = Path("C:/Logs/VoiceSQL/exports")
-        if not export_dir.exists():
-            return {"exports": [], "message": "No exports directory found"}
+            # Also include TXT files
+            for file in export_dir.glob("*.txt"):
+                stat = file.stat()
+                exports.append({
+                    "filename": file.name,
+                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                    "created": stat.st_ctime,
+                    "download_url": f"/download/{file.name}"
+                })
 
-        exports = []
-        for file in export_dir.glob("*.csv"):
-            stat = file.stat()
-            exports.append({
-                "filename": file.name,
-                "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                "created": stat.st_ctime,
-                "download_url": f"/download/{file.name}"
-            })
+            # Sort by creation time, newest first
+            exports.sort(key=lambda x: x["created"], reverse=True)
 
-        # Sort by creation time, newest first
-        exports.sort(key=lambda x: x["created"], reverse=True)
+            return {
+                "exports": exports,
+                "count": len(exports),
+                "total_size_mb": sum(e["size_mb"] for e in exports)
+            }
 
-        return {
-            "exports": exports,
-            "count": len(exports),
-            "total_size_mb": sum(e["size_mb"] for e in exports)
-        }
+        except Exception as e:
+            logger.error(f"Error listing exports: {e}")
+            raise HTTPException(status_code=500, detail=f"Error listing exports: {e}")
 
-    except Exception as e:
-        logger.error(f"Error listing exports: {e}")
-        raise HTTPException(status_code=500, detail=f"Error listing exports: {e}")
+    @app.get("/download/{filename}")
+    async def download_export(filename: str):
+        """Download an exported file"""
+        try:
+            export_dir = Path("C:/Logs/VoiceSQL/exports")
+            file_path = export_dir / filename
 
+            # Security: ensure the file is in the exports directory
+            if not file_path.is_file() or not str(file_path).startswith(str(export_dir)):
+                logger.warning(f"Download attempt for invalid file: {filename}")
+                raise HTTPException(status_code=404, detail="File not found")
 
-@app.get("/download/{filename}")
-async def download_export(filename: str):
-    """Download an exported file"""
-    try:
-        export_dir = Path("C:/Logs/VoiceSQL/exports")
-        file_path = export_dir / filename
+            logger.info(f"Serving download for file: {filename}")
 
-        # Security: ensure the file is in the exports directory
-        if not file_path.is_file() or not str(file_path).startswith(str(export_dir)):
-            raise HTTPException(status_code=404, detail="File not found")
+            return FileResponse(
+                path=file_path,
+                filename=filename,
+                media_type='application/octet-stream'
+            )
 
-        return FileResponse(
-            path=file_path,
-            filename=filename,
-            media_type='application/octet-stream'
-        )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error downloading file: {e}")
+            raise HTTPException(status_code=500, detail=f"Error downloading file: {e}")
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error downloading file: {e}")
-        raise HTTPException(status_code=500, detail=f"Error downloading file: {e}")
+    @app.delete("/exports/{filename}")
+    async def delete_export(filename: str):
+        """Delete an exported file"""
+        try:
+            export_dir = Path("C:/Logs/VoiceSQL/exports")
+            file_path = export_dir / filename
 
+            if not file_path.is_file() or not str(file_path).startswith(str(export_dir)):
+                raise HTTPException(status_code=404, detail="File not found")
 
-@app.delete("/exports/{filename}")
-async def delete_export(filename: str):
-    """Delete an exported file"""
-    try:
-        export_dir = Path("C:/Logs/VoiceSQL/exports")
-        file_path = export_dir / filename
+            file_path.unlink()
+            logger.info(f"Deleted export file: {filename}")
+            return {"message": f"File {filename} deleted successfully"}
 
-        if not file_path.is_file() or not str(file_path).startswith(str(export_dir)):
-            raise HTTPException(status_code=404, detail="File not found")
-
-        file_path.unlink()
-        return {"message": f"File {filename} deleted successfully"}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting file: {e}")
-        raise HTTPException(status_code=500, detail=f"Error deleting file: {e}")
-
-
-# Enhanced query request model
-class QueryRequest(BaseModel):
-    question: str
-    export_format: Optional[str] = None  # 'csv', 'txt', or None for display
-
-
-@app.post("/ask")
-async def ask_question(request: QueryRequest) -> QueryResponse:
-    """Process a natural language question with optional export"""
-    try:
-        if not kernel:
-            raise HTTPException(status_code=503, detail="Service not initialized")
-
-        logger.info(f"Processing question: {request.question}")
-
-        # If user specifically requested export, modify the question
-        if request.export_format:
-            export_instruction = f" Please export the results to {request.export_format} format."
-            enhanced_question = request.question + export_instruction
-        else:
-            enhanced_question = request.question
-
-        # Process the question through the kernel
-        response = await kernel.message(enhanced_question, chat_history)
-
-        logger.info("Response generated successfully")
-
-        return QueryResponse(
-            answer=str(response),
-            status="success"
-        )
-
-    except Exception as e:
-        logger.error(f"Error processing question: {e}")
-        raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
-
-def setup_signal_handlers():
-    """Setup signal handlers for graceful shutdown"""
-
-    def signal_handler(signum, frame):
-        global shutdown_requested
-        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-        shutdown_requested = True
-
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error deleting file: {e}")
+            raise HTTPException(status_code=500, detail=f"Error deleting file: {e}")
 
 def main():
     """Main entry point for production server"""
     import uvicorn
+    import time
 
     try:
-        # Setup signal handlers
-        setup_signal_handlers()
-
         # Load configuration
         config = load_environment_config()
 
