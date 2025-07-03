@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 
 from azure.identity import DefaultAzureCredential
@@ -13,8 +14,7 @@ from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_
 from semantic_kernel.contents.author_role import AuthorRole
 from semantic_kernel.contents.finish_reason import FinishReason
 
-from ..database import Database
-
+from src.database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -23,27 +23,36 @@ scope = 'https://cognitiveservices.azure.com/.default'
 
 
 class Kernel:
-    def __init__(self, database_service: Database, credential: DefaultAzureCredential, openai_endpoint: str, openai_deployment_name: str) -> None:
+    def __init__(self, database_service: Database, credential: DefaultAzureCredential, openai_endpoint: str,
+                 openai_deployment_name: str) -> None:
         # Create a new kernel
         self.kernel = SemanticKernel()
         # Create a chat completion service
-        self.chat_completion = AzureChatCompletion(ad_token=credential.get_token(scope).token, endpoint=openai_endpoint, deployment_name=openai_deployment_name)
+        self.chat_completion = AzureChatCompletion(ad_token=credential.get_token(scope).token, endpoint=openai_endpoint,
+                                                   deployment_name=openai_deployment_name)
 
         # Add Azure OpenAI chat completion
         self.kernel.add_service(self.chat_completion)
 
-        # Add plugins located under /plugins folder
-        parent_directory = os.path.join(__file__, "../../")
-        init_args = {
-            "DatabasePlugin": {
-                "db": database_service
-            }
-        }
-        self.kernel.add_plugin(parent_directory=parent_directory, plugin_name="plugins", class_init_arguments=init_args)
+        # Import and add the plugin directly instead of loading from directory
+        try:
+            from src.plugins.database_plugin import DatabasePlugin
+
+            # Create plugin instance
+            plugin_instance = DatabasePlugin(db=database_service)
+
+            # Add the plugin instance to the kernel
+            self.kernel.add_plugin(plugin_instance, "DatabasePlugin")
+            logger.info("Successfully loaded DatabasePlugin")
+
+        except Exception as e:
+            logger.error(f"Failed to load DatabasePlugin: {e}")
+            raise
 
         # Enable automatic function calling
         self.execution_settings = AzureChatPromptExecutionSettings(tool_choice="auto")
-        self.execution_settings.function_call_behavior = FunctionCallBehavior.EnableFunctions(auto_invoke=True, filters={})
+        self.execution_settings.function_call_behavior = FunctionCallBehavior.EnableFunctions(auto_invoke=True,
+                                                                                              filters={})
 
     async def message(self, user_input: str, chat_history: ChatHistory) -> str:
         """
