@@ -1,5 +1,3 @@
-# server_api.py - Cleaned up version without TokenManager
-
 import time
 import os
 import subprocess
@@ -7,6 +5,7 @@ import socket
 import sys
 import logging
 import uvicorn
+import re
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -16,16 +15,12 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from azure.identity import DefaultAzureCredential
 from semantic_kernel.contents.chat_history import ChatHistory
-
-# Import your existing modules
-from src.speech import Speech
-from src.kernel import Kernel
-from src.orchestrator import Orchestrator
+from src.kernel.service import Kernel
 from src.database.secure_service import create_database_service, get_database_credentials, SecureDatabase
+
 
 # Configure logging
 def setup_production_logging():
-    """Setup logging for Windows service environment"""
     log_dir = Path("C:/Logs")
     log_dir.mkdir(exist_ok=True)
     log_file = log_dir / "voice_sql_api.log"
@@ -34,11 +29,10 @@ def setup_production_logging():
         "[%(asctime)s - %(name)s:%(lineno)d - %(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     ))
-    # Force UTF-8 encoding for console
     console_handler.stream = open(sys.stdout.fileno(), mode='w', encoding='utf-8', errors='replace')
     logging.basicConfig(
         level=logging.INFO,
-        format="[%(asctime)s - %(name)s:%(lineno)d - %(levelname)s] %(message)s",
+        format="[%%(asctime)s - %%(name)s:%%(lineno)d - %%(levelname)s] %%(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
             logging.FileHandler(log_file, mode='a', encoding='utf-8'),
@@ -50,26 +44,177 @@ def setup_production_logging():
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     return logging.getLogger(__name__)
 
-# Initialize logging first
+
 logger = setup_production_logging()
 
-# FastAPI app
 app = FastAPI(
     title="Voice SQL API",
     version="1.0.0",
     description="Production Voice SQL API Service"
 )
+
+kernel = None
+chat_history = None
+shutdown_requested = False
+
+
+class QueryRequest(BaseModel):
+    question: str
+    export_format: Optional[str] = None  # 'csv', 'txt', or None for display
+
+
+class QueryResponse(BaseModel):
+    answer: str
+    status: str = "success"
+
+
+class SimpleKernel:
+    """Fallback kernel for when AI services aren't available, with basic NLP"""
+
+    def __init__(self, database_service):
+        self.database_service = database_service
+
+    async def message(self, user_input: str, chat_history: ChatHistory) -> str:
+        """Process natural language queries with basic parsing"""
+        try:
+            # Normalize input
+            user_input = user_input.lower().strip()
+            logger.info(f"SimpleKernel processing query: {user_input}")
+
+            # Pattern for counting records: "how many records in [table]"
+            count_pattern = r"how\s+many\s+records\s+(?:are\s+)?in\s+([a-zA-Z_][a-zA-Z0-9_]*)"
+            count_match = re.match(count_pattern, user_input)
+            if count_match:
+                table_name = count_match.group(1)
+                sql_query = f"SELECT COUNT(*) FROM {table_name}"
+                result = self.database_service.query(sql_query)
+                if isinstance(result, str):
+                    return result  # Error message
+                elif result and isinstance(result[0], tuple):
+                    count = result[0][0]
+                    return f"The table {table_name} has {count:,} records."
+                else:
+                    return f"No records found in table {table_name}."
+
+            # Pattern for selecting columns: "show [columns] from [table]"
+            select_pattern = r"show\s+([a-zA-Z0-9_, ]+)\s+from\s+([a-zA-Z_][a-zA-Z0-9_]*)"
+            select_match = re.match(select_pattern, user_input)
+            if select_match:
+                columns = select_match.group(1).replace(" ", "").split(",")
+                table_name = select_match.group(2)
+                sql_query = f"SELECT {', '.join(columns)} FROM {table_name} WHERE ROWNUM <= 3"  # Limit to 3 rows
+                result = self.database_service.query(sql_query)
+                if isinstance(result, str):
+                    return result
+                elif result:
+                    return f"Query returned {len(result)} rows: {str(result)}"
+                else:
+                    return f"No records found in table {table_name}."
+
+            # If query is unrecognized
+            return "Sorry, I couldn't understand your query. Try something like 'how many records in [table]' or 'show [columns] from [table]'."
+
+        except Exception as e:
+            logger.error(f"SimpleKernel error: {e}")
+            return f"Error executing query: {str(e)}"
+
+
+def load_environment_config():
+    env_paths = [
+        Path(".env"),
+        Path(__file__).parent / ".env",
+    ]
+    env_loaded = False
+    for env_path in env_paths:
+        if env_path.exists():
+            logger.info(f"Loading .env file from: {env_path.absolute()}")
+            load_dotenv(env_path)
+            env_loaded = True
+            break
+    if not env_loaded:
+        logger.warning("No .env file found in expected locations")
+        logger.info(f"Searched: {[str(p.absolute()) for p in env_paths]}")
+
+    config = {
+        'server_name': os.getenv("SQL_SERVER_NAME", "BI-SQL001"),
+        'database_name': os.getenv("SQL_DATABASE_NAME", "CRPAF"),
+        'openai_endpoint': os.getenv("AZURE_OPENAI_ENDPOINT"),
+        'openai_deployment_name': os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT_NAME"),
+        'db_username': os.getenv("DB_USERNAME"),
+        'db_password': os.getenv("DB_PASSWORD"),
+        'server_host': os.getenv("SERVER_HOST", "0.0.0.0"),
+        'server_port': int(os.getenv("SERVER_PORT", "8000")),
+        'debug': os.getenv("DEBUG", "false").lower() == "true"
+    }
+    logger.info("Production environment configuration:")
+    logger.info(f"  Working Directory: {os.getcwd()}")
+    logger.info(f"  SQL Server: {config['server_name']}")
+    logger.info(f"  Database: {config['database_name']}")
+    logger.info(f"  DB Username from env: {'Yes' if config['db_username'] else 'No'}")
+    logger.info(f"  DB Password from env: {'Yes' if config['db_password'] else 'No'}")
+    logger.info(f"  Azure OpenAI: {'Yes' if config['openai_endpoint'] else 'No'}")
+    logger.info(f"  Server: {config['server_host']}:{config['server_port']}")
+    return config
+
+
+def initialize_database_service(config):
+    try:
+        if config['db_username'] and config['db_password']:
+            logger.info(f"Using database credentials from environment for user: {config['db_username']}")
+            database_service = SecureDatabase(
+                server_name=config['server_name'],
+                database_name=config['database_name'],
+                username=config['db_username'],
+                password=config['db_password']
+            )
+        else:
+            username, password = get_database_credentials()
+            if username and password:
+                logger.info(f"Using database credentials from encrypted storage for user: {username}")
+                database_service = SecureDatabase(
+                    server_name=config['server_name'],
+                    database_name=config['database_name'],
+                    username=username,
+                    password=password
+                )
+            else:
+                logger.warning("No credentials found - using trusted connection")
+                database_service = create_database_service(
+                    config['server_name'],
+                    config['database_name']
+                )
+        if database_service.test_connection():
+            logger.info("Database connection successful")
+            return database_service
+        else:
+            raise Exception("Database connection test failed")
+    except Exception as e:
+        logger.error(f"Failed to initialize database service: {e}")
+        raise
+
+
+def initialize_azure_services(config):
+    try:
+        credential = None
+        if config['openai_endpoint'] and config['openai_deployment_name']:
+            credential = DefaultAzureCredential()
+            logger.info("Azure credentials initialized")
+        else:
+            logger.info("Azure OpenAI not configured")
+        return credential
+    except Exception as e:
+        logger.warning(f"Azure credential initialization failed: {e}")
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logic
     global kernel, chat_history
     try:
         logger.info("Starting Voice SQL API server...")
         config = load_environment_config()
         database_service = initialize_database_service(config)
-        logger.info("Database connection successful")
-        credential, speech_service = initialize_azure_services(config)
-        logger.info("Azure credentials initialized")
+        credential = initialize_azure_services(config)
         if credential and config['openai_endpoint'] and config['openai_deployment_name']:
             try:
                 kernel = Kernel(
@@ -88,10 +233,10 @@ async def lifespan(app: FastAPI):
             kernel = SimpleKernel(database_service=database_service)
         chat_history = ChatHistory()
         logger.info("Voice SQL API server ready!")
-        logger.info(f"   Database: {config['database_name']} on {config['server_name']}")
-        logger.info(f"   Security: {'Authenticated user' if config['db_username'] else 'Trusted connection'}")
-        logger.info(f"   AI: {'Enabled with auto token refresh' if hasattr(kernel, 'chat_completion') else 'Disabled'}")
-        logger.info(f"   Speech: {'Enabled' if speech_service else 'Disabled'}")
+        logger.info(f"  Database: {config['database_name']} on {config['server_name']}")
+        logger.info(f"  Security: {'Authenticated user' if config['db_username'] else 'Trusted connection'}")
+        logger.info(f"  AI: {'Enabled with auto token refresh' if hasattr(kernel, 'chat_completion') else 'Disabled'}")
+        logger.info(f"  Speech: Handled by client (Windows TTS)")
     except Exception as e:
         logger.error(f"Critical startup failure: {e}", exc_info=True)
         try:
@@ -103,189 +248,32 @@ async def lifespan(app: FastAPI):
         except Exception as minimal_error:
             logger.error(f"Even minimal initialization failed: {minimal_error}", exc_info=True)
             raise
-    yield  # Application runs here
-    # Shutdown logic
+    yield
     logger.info("Voice SQL API server shutting down...")
+    global shutdown_requested
+    shutdown_requested = True
+
 
 app = FastAPI(lifespan=lifespan)
 
-# Global variables
-kernel = None
-chat_history = None
-shutdown_requested = False
 
-# Fixed model definitions with proper imports
-class QueryRequest(BaseModel):
-    question: str
-    export_format: Optional[str] = None  # 'csv', 'txt', or None for display
-
-class QueryResponse(BaseModel):
-    answer: str
-    status: str = "success"
-
-def load_environment_config():
-    """Load and validate environment configuration for production"""
-
-    # Find and load .env file
-    env_paths = [
-        Path(".env"),  # Current directory
-        Path(__file__).parent / ".env",  # Script directory
-    ]
-
-    env_loaded = False
-    for env_path in env_paths:
-        if env_path.exists():
-            logger.info(f"Loading .env file from: {env_path.absolute()}")
-            load_dotenv(env_path)
-            env_loaded = True
-            break
-
-    if not env_loaded:
-        logger.warning("No .env file found in expected locations")
-        logger.info(f"Searched: {[str(p.absolute()) for p in env_paths]}")
-
-    config = {
-        'server_name': os.getenv("SQL_SERVER_NAME", "BI-SQL001"),
-        'database_name': os.getenv("SQL_DATABASE_NAME", "CRPAF"),
-        'speech_service_id': os.getenv("SPEECH_SERVICE_ID"),
-        'azure_location': os.getenv("AZURE_LOCATION"),
-        'openai_endpoint': os.getenv("AZURE_OPENAI_ENDPOINT"),
-        'openai_deployment_name': os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT_NAME"),
-        'db_username': os.getenv("DB_USERNAME"),
-        'db_password': os.getenv("DB_PASSWORD"),
-        'server_host': os.getenv("SERVER_HOST", "0.0.0.0"),
-        'server_port': int(os.getenv("SERVER_PORT", "8000")),
-        'debug': os.getenv("DEBUG", "false").lower() == "true"
-    }
-
-    logger.info("Production environment configuration:")
-    logger.info(f"  Working Directory: {os.getcwd()}")
-    logger.info(f"  SQL Server: {config['server_name']}")
-    logger.info(f"  Database: {config['database_name']}")
-    logger.info(f"  DB Username from env: {'Yes' if config['db_username'] else 'No'}")
-    logger.info(f"  DB Password from env: {'Yes' if config['db_password'] else 'No'}")
-    logger.info(f"  Azure OpenAI: {'Yes' if config['openai_endpoint'] else 'No'}")
-    logger.info(f"  Speech Service: {'Yes' if config['speech_service_id'] else 'No'}")
-    logger.info(f"  Server: {config['server_host']}:{config['server_port']}")
-
-    return config
-
-class SimpleKernel:
-    """Fallback kernel for when AI services aren't available"""
-
-    def __init__(self, database_service):
-        self.database_service = database_service
-
-    async def message(self, user_input: str, chat_history: ChatHistory) -> str:
-        """Simple message handler that directly queries the database"""
-        try:
-            # Basic SQL query processing
-            result = self.database_service.query(user_input)
-
-            if isinstance(result, str):
-                return result  # Error message
-            elif result:
-                return f"Query returned {len(result)} rows: {str(result[:3])}"
-            else:
-                return "Query executed successfully but returned no results."
-
-        except Exception as e:
-            logger.error(f"SimpleKernel error: {e}")
-            return f"Error executing query: {str(e)}"
-
-def initialize_database_service(config):
-    """Initialize database service with proper error handling"""
-    try:
-        # Get credentials - prioritize environment variables
-        if config['db_username'] and config['db_password']:
-            logger.info(f"Using database credentials from environment for user: {config['db_username']}")
-            database_service = SecureDatabase(
-                server_name=config['server_name'],
-                database_name=config['database_name'],
-                username=config['db_username'],
-                password=config['db_password']
-            )
-        else:
-            # Try encrypted storage fallback
-            username, password = get_database_credentials()
-            if username and password:
-                logger.info(f"Using database credentials from encrypted storage for user: {username}")
-                database_service = SecureDatabase(
-                    server_name=config['server_name'],
-                    database_name=config['database_name'],
-                    username=username,
-                    password=password
-                )
-            else:
-                logger.warning("No credentials found - using trusted connection")
-                database_service = create_database_service(
-                    config['server_name'],
-                    config['database_name']
-                )
-
-        # Test connection
-        if database_service.test_connection():
-            logger.info("Database connection successful")
-            return database_service
-        else:
-            raise Exception("Database connection test failed")
-
-    except Exception as e:
-        logger.error(f"Failed to initialize database service: {e}")
-        raise
-
-def initialize_azure_services(config):
-    """Initialize Azure services (optional)"""
-    credential = None
-    speech_service = None
-
-    # Initialize Azure credential
-    try:
-        if config['openai_endpoint'] and config['openai_deployment_name']:
-            credential = DefaultAzureCredential()
-            logger.info("Azure credentials initialized")
-        else:
-            logger.info("Azure OpenAI not configured")
-    except Exception as e:
-        logger.warning(f"Azure credential initialization failed: {e}")
-
-    # Initialize speech service
-    try:
-        if credential and config['speech_service_id'] and config['azure_location']:
-            speech_service = Speech(
-                credential=credential,
-                resource_id=config['speech_service_id'],
-                region=config['azure_location']
-            )
-            logger.info("Speech service initialized")
-    except Exception as e:
-        logger.warning(f"Speech service initialization failed: {e}")
-
-    return credential, speech_service
-
-# Health and status endpoints
 @app.get("/")
 async def root():
-    """Root endpoint"""
     return {
         "message": "Voice SQL API is running",
         "status": "healthy",
         "mode": "production"
     }
 
+
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for monitoring"""
     try:
-        # Test database connection
         db_status = False
         if kernel and hasattr(kernel, 'database_service'):
             db_status = kernel.database_service.test_connection()
-
-        # Get credential info
         config = load_environment_config()
         username = config['db_username'] or get_database_credentials()[0]
-
         health_data = {
             "status": "healthy" if db_status else "degraded",
             "timestamp": time.time(),
@@ -301,53 +289,41 @@ async def health_check():
                 "token_refresh": "automatic" if hasattr(kernel, '_refresh_token_and_reinitialize') else "manual"
             }
         }
-
         if not db_status:
             logger.warning("Health check failed - database not connected")
-
         return health_data
-
     except Exception as e:
         logger.error(f"Health check error: {e}")
         raise HTTPException(status_code=500, detail="Health check failed")
 
+
 @app.post("/ask")
 async def ask_question(request: QueryRequest) -> QueryResponse:
-    """Process a natural language question with optional export"""
     try:
         if not kernel:
             raise HTTPException(status_code=503, detail="Service not initialized")
-
         logger.info(f"Processing question: {request.question}")
-
-        # If user specifically requested export, modify the question
         if request.export_format:
             export_instruction = f" Please export the results to {request.export_format} format."
             enhanced_question = request.question + export_instruction
         else:
             enhanced_question = request.question
-
-        # Process the question through the kernel (now with automatic token refresh)
         response = await kernel.message(enhanced_question, chat_history)
-
         logger.info("Response generated successfully")
-
         return QueryResponse(
             answer=str(response),
             status="success"
         )
-
     except Exception as e:
         logger.error(f"Error processing question: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
 
+
 @app.get("/status")
 async def get_detailed_status():
-    """Get detailed server status for monitoring"""
     try:
         config = load_environment_config()
         username = config['db_username'] or get_database_credentials()[0]
-
         return {
             "server": "running",
             "uptime": time.time(),
@@ -362,7 +338,6 @@ async def get_detailed_status():
             "services": {
                 "kernel_type": "ai_enabled" if hasattr(kernel, 'chat_completion') else "simple",
                 "azure_openai": "configured" if config['openai_endpoint'] else "not_configured",
-                "speech_service": "configured" if config['speech_service_id'] else "not_configured",
                 "token_management": "automatic" if hasattr(kernel, '_refresh_token_and_reinitialize') else "none"
             },
             "environment": {
@@ -375,14 +350,13 @@ async def get_detailed_status():
         logger.error(f"Status check failed: {e}")
         raise HTTPException(status_code=500, detail="Status check failed")
 
+
 @app.get("/exports")
 async def list_exports():
-    """List available export files"""
     try:
         export_dir = Path("C:/Logs/VoiceSQL/exports")
         if not export_dir.exists():
             return {"exports": [], "message": "No exports directory found"}
-
         exports = []
         for file in export_dir.glob("*.csv"):
             stat = file.stat()
@@ -392,8 +366,6 @@ async def list_exports():
                 "created": stat.st_ctime,
                 "download_url": f"/download/{file.name}"
             })
-
-        # Also include TXT files
         for file in export_dir.glob("*.txt"):
             stat = file.stat()
             exports.append({
@@ -402,70 +374,57 @@ async def list_exports():
                 "created": stat.st_ctime,
                 "download_url": f"/download/{file.name}"
             })
-
-        # Sort by creation time, newest first
         exports.sort(key=lambda x: x["created"], reverse=True)
-
         return {
             "exports": exports,
             "count": len(exports),
             "total_size_mb": sum(e["size_mb"] for e in exports)
         }
-
     except Exception as e:
         logger.error(f"Error listing exports: {e}")
         raise HTTPException(status_code=500, detail=f"Error listing exports: {e}")
 
+
 @app.get("/download/{filename}")
 async def download_export(filename: str):
-    """Download an exported file"""
     try:
         export_dir = Path("C:/Logs/VoiceSQL/exports")
         file_path = export_dir / filename
-
-        # Security: ensure the file is in the exports directory
         if not file_path.is_file() or not str(file_path).startswith(str(export_dir)):
             logger.warning(f"Download attempt for invalid file: {filename}")
             raise HTTPException(status_code=404, detail="File not found")
-
         logger.info(f"Serving download for file: {filename}")
-
         return FileResponse(
             path=file_path,
             filename=filename,
             media_type='application/octet-stream'
         )
-
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error downloading file: {e}")
         raise HTTPException(status_code=500, detail=f"Error downloading file: {e}")
 
+
 @app.delete("/exports/{filename}")
 async def delete_export(filename: str):
-    """Delete an exported file"""
     try:
         export_dir = Path("C:/Logs/VoiceSQL/exports")
         file_path = export_dir / filename
-
         if not file_path.is_file() or not str(file_path).startswith(str(export_dir)):
             raise HTTPException(status_code=404, detail="File not found")
-
         file_path.unlink()
         logger.info(f"Deleted export file: {filename}")
         return {"message": f"File {filename} deleted successfully"}
-
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error deleting file: {e}")
         raise HTTPException(status_code=500, detail=f"Error deleting file: {e}")
 
+
 def main():
-    """Main entry point for production server"""
     try:
-        # Check and free port 8000
         logger.info("Checking for processes on port 8000...")
         try:
             result = subprocess.run(
@@ -480,11 +439,9 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to check or free port 8000: {e}")
 
-        # Load configuration
         config = load_environment_config()
         logger.info(f"Starting production server on {config['server_host']}:{config['server_port']}")
         logger.info(f"Process ID: {os.getpid()}")
-        logger.info(f"Working directory: {os.getcwd()}")
         uvicorn.run(
             "server_api:app",
             host=config['server_host'],
@@ -501,9 +458,9 @@ def main():
         sys.exit(1)
     finally:
         logger.info("Server process ending")
-        # Ensure port is released
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.close()
+
 
 if __name__ == "__main__":
     main()
