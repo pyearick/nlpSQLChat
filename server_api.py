@@ -1,4 +1,4 @@
-# server_api.py - Fixed imports and model definitions
+# server_api.py - Cleaned up version without TokenManager
 
 import os
 import sys
@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import Optional  # <-- ADD THIS IMPORT
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -22,7 +22,6 @@ from src.database.secure_service import create_database_service, get_database_cr
 
 # Load environment variables FIRST
 load_dotenv()
-
 
 # Configure logging
 def setup_production_logging():
@@ -53,7 +52,6 @@ def setup_production_logging():
 
     return logging.getLogger(__name__)
 
-
 # Initialize logging first
 logger = setup_production_logging()
 
@@ -69,17 +67,14 @@ kernel = None
 chat_history = None
 shutdown_requested = False
 
-
 # Fixed model definitions with proper imports
 class QueryRequest(BaseModel):
     question: str
     export_format: Optional[str] = None  # 'csv', 'txt', or None for display
 
-
 class QueryResponse(BaseModel):
     answer: str
     status: str = "success"
-
 
 def load_environment_config():
     """Load and validate environment configuration for production"""
@@ -128,7 +123,6 @@ def load_environment_config():
 
     return config
 
-
 class SimpleKernel:
     """Fallback kernel for when AI services aren't available"""
 
@@ -151,7 +145,6 @@ class SimpleKernel:
         except Exception as e:
             logger.error(f"SimpleKernel error: {e}")
             return f"Error executing query: {str(e)}"
-
 
 def initialize_database_service(config):
     """Initialize database service with proper error handling"""
@@ -194,7 +187,6 @@ def initialize_database_service(config):
         logger.error(f"Failed to initialize database service: {e}")
         raise
 
-
 def initialize_azure_services(config):
     """Initialize Azure services (optional)"""
     credential = None
@@ -224,14 +216,13 @@ def initialize_azure_services(config):
 
     return credential, speech_service
 
-
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application on startup"""
     global kernel, chat_history
 
     try:
-        logger.info("🚀 Starting Voice SQL API server in production mode...")
+        logger.info("🚀 Starting Voice SQL API server...")
 
         # Load configuration
         config = load_environment_config()
@@ -242,7 +233,7 @@ async def startup_event():
         # Initialize Azure services (optional)
         credential, speech_service = initialize_azure_services(config)
 
-        # Initialize the semantic kernel
+        # Initialize the semantic kernel (now with built-in token refresh)
         if credential and config['openai_endpoint'] and config['openai_deployment_name']:
             try:
                 kernel = Kernel(
@@ -251,7 +242,7 @@ async def startup_event():
                     openai_endpoint=config['openai_endpoint'],
                     openai_deployment_name=config['openai_deployment_name']
                 )
-                logger.info("✅ Semantic kernel initialized with AI")
+                logger.info("✅ Semantic kernel initialized with automatic token refresh")
             except Exception as e:
                 logger.error(f"AI kernel initialization failed: {e}")
                 logger.info("Falling back to simple kernel")
@@ -268,14 +259,21 @@ async def startup_event():
         logger.info("✅ Voice SQL API server ready!")
         logger.info(f"   Database: {config['database_name']} on {config['server_name']}")
         logger.info(f"   Security: {'Authenticated user' if config['db_username'] else 'Trusted connection'}")
-        logger.info(f"   AI: {'Enabled' if hasattr(kernel, 'chat_completion') else 'Disabled'}")
+        logger.info(f"   AI: {'Enabled with auto token refresh' if hasattr(kernel, 'chat_completion') else 'Disabled'}")
         logger.info(f"   Speech: {'Enabled' if speech_service else 'Disabled'}")
 
     except Exception as e:
         logger.error(f"❌ Critical startup failure: {e}")
-        logger.error("Server will exit and restart via Task Scheduler")
-        raise
-
+        # Create minimal functionality
+        try:
+            config = load_environment_config()
+            database_service = initialize_database_service(config)
+            kernel = SimpleKernel(database_service=database_service)
+            chat_history = ChatHistory()
+            logger.info("✅ Minimal server functionality initialized")
+        except Exception as minimal_error:
+            logger.error(f"❌ Even minimal initialization failed: {minimal_error}")
+            raise
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -283,7 +281,6 @@ async def shutdown_event():
     global shutdown_requested
     shutdown_requested = True
     logger.info("Voice SQL API server shutting down...")
-
 
 # Health and status endpoints
 @app.get("/")
@@ -294,7 +291,6 @@ async def root():
         "status": "healthy",
         "mode": "production"
     }
-
 
 @app.get("/health")
 async def health_check():
@@ -320,7 +316,8 @@ async def health_check():
             },
             "services": {
                 "ai_enabled": hasattr(kernel, 'chat_completion') if kernel else False,
-                "kernel_type": "ai" if hasattr(kernel, 'chat_completion') else "simple"
+                "kernel_type": "ai" if hasattr(kernel, 'chat_completion') else "simple",
+                "token_refresh": "automatic" if hasattr(kernel, '_refresh_token_and_reinitialize') else "manual"
             }
         }
 
@@ -332,7 +329,6 @@ async def health_check():
     except Exception as e:
         logger.error(f"Health check error: {e}")
         raise HTTPException(status_code=500, detail="Health check failed")
-
 
 @app.post("/ask")
 async def ask_question(request: QueryRequest) -> QueryResponse:
@@ -350,7 +346,7 @@ async def ask_question(request: QueryRequest) -> QueryResponse:
         else:
             enhanced_question = request.question
 
-        # Process the question through the kernel
+        # Process the question through the kernel (now with automatic token refresh)
         response = await kernel.message(enhanced_question, chat_history)
 
         logger.info("Response generated successfully")
@@ -363,7 +359,6 @@ async def ask_question(request: QueryRequest) -> QueryResponse:
     except Exception as e:
         logger.error(f"Error processing question: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
-
 
 @app.get("/status")
 async def get_detailed_status():
@@ -386,7 +381,8 @@ async def get_detailed_status():
             "services": {
                 "kernel_type": "ai_enabled" if hasattr(kernel, 'chat_completion') else "simple",
                 "azure_openai": "configured" if config['openai_endpoint'] else "not_configured",
-                "speech_service": "configured" if config['speech_service_id'] else "not_configured"
+                "speech_service": "configured" if config['speech_service_id'] else "not_configured",
+                "token_management": "automatic" if hasattr(kernel, '_refresh_token_and_reinitialize') else "none"
             },
             "environment": {
                 "env_file_loaded": any(Path(p).exists() for p in [".env", Path(__file__).parent / ".env"]),
@@ -488,7 +484,6 @@ async def delete_export(filename: str):
 def main():
     """Main entry point for production server"""
     import uvicorn
-    import time
 
     try:
         # Load configuration
@@ -516,7 +511,6 @@ def main():
         sys.exit(1)  # Exit with error code so Task Scheduler restarts
     finally:
         logger.info("Server process ending")
-
 
 if __name__ == "__main__":
     main()
