@@ -398,92 +398,92 @@ async def get_detailed_status():
         logger.error(f"Status check failed: {e}")
         raise HTTPException(status_code=500, detail="Status check failed")
 
-    @app.get("/exports")
-    async def list_exports():
-        """List available export files"""
-        try:
-            export_dir = Path("C:/Logs/VoiceSQL/exports")
-            if not export_dir.exists():
-                return {"exports": [], "message": "No exports directory found"}
+@app.get("/exports")
+async def list_exports():
+    """List available export files"""
+    try:
+        export_dir = Path("C:/Logs/VoiceSQL/exports")
+        if not export_dir.exists():
+            return {"exports": [], "message": "No exports directory found"}
 
-            exports = []
-            for file in export_dir.glob("*.csv"):
-                stat = file.stat()
-                exports.append({
-                    "filename": file.name,
-                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                    "created": stat.st_ctime,
-                    "download_url": f"/download/{file.name}"
-                })
+        exports = []
+        for file in export_dir.glob("*.csv"):
+            stat = file.stat()
+            exports.append({
+                "filename": file.name,
+                "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "created": stat.st_ctime,
+                "download_url": f"/download/{file.name}"
+            })
 
-            # Also include TXT files
-            for file in export_dir.glob("*.txt"):
-                stat = file.stat()
-                exports.append({
-                    "filename": file.name,
-                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                    "created": stat.st_ctime,
-                    "download_url": f"/download/{file.name}"
-                })
+        # Also include TXT files
+        for file in export_dir.glob("*.txt"):
+            stat = file.stat()
+            exports.append({
+                "filename": file.name,
+                "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "created": stat.st_ctime,
+                "download_url": f"/download/{file.name}"
+            })
 
-            # Sort by creation time, newest first
-            exports.sort(key=lambda x: x["created"], reverse=True)
+        # Sort by creation time, newest first
+        exports.sort(key=lambda x: x["created"], reverse=True)
 
-            return {
-                "exports": exports,
-                "count": len(exports),
-                "total_size_mb": sum(e["size_mb"] for e in exports)
-            }
+        return {
+            "exports": exports,
+            "count": len(exports),
+            "total_size_mb": sum(e["size_mb"] for e in exports)
+        }
 
-        except Exception as e:
-            logger.error(f"Error listing exports: {e}")
-            raise HTTPException(status_code=500, detail=f"Error listing exports: {e}")
+    except Exception as e:
+        logger.error(f"Error listing exports: {e}")
+        raise HTTPException(status_code=500, detail=f"Error listing exports: {e}")
 
-    @app.get("/download/{filename}")
-    async def download_export(filename: str):
-        """Download an exported file"""
-        try:
-            export_dir = Path("C:/Logs/VoiceSQL/exports")
-            file_path = export_dir / filename
+@app.get("/download/{filename}")
+async def download_export(filename: str):
+    """Download an exported file"""
+    try:
+        export_dir = Path("C:/Logs/VoiceSQL/exports")
+        file_path = export_dir / filename
 
-            # Security: ensure the file is in the exports directory
-            if not file_path.is_file() or not str(file_path).startswith(str(export_dir)):
-                logger.warning(f"Download attempt for invalid file: {filename}")
-                raise HTTPException(status_code=404, detail="File not found")
+        # Security: ensure the file is in the exports directory
+        if not file_path.is_file() or not str(file_path).startswith(str(export_dir)):
+            logger.warning(f"Download attempt for invalid file: {filename}")
+            raise HTTPException(status_code=404, detail="File not found")
 
-            logger.info(f"Serving download for file: {filename}")
+        logger.info(f"Serving download for file: {filename}")
 
-            return FileResponse(
-                path=file_path,
-                filename=filename,
-                media_type='application/octet-stream'
-            )
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type='application/octet-stream'
+        )
 
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error downloading file: {e}")
-            raise HTTPException(status_code=500, detail=f"Error downloading file: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading file: {e}")
+        raise HTTPException(status_code=500, detail=f"Error downloading file: {e}")
 
-    @app.delete("/exports/{filename}")
-    async def delete_export(filename: str):
-        """Delete an exported file"""
-        try:
-            export_dir = Path("C:/Logs/VoiceSQL/exports")
-            file_path = export_dir / filename
+@app.delete("/exports/{filename}")
+async def delete_export(filename: str):
+    """Delete an exported file"""
+    try:
+        export_dir = Path("C:/Logs/VoiceSQL/exports")
+        file_path = export_dir / filename
 
-            if not file_path.is_file() or not str(file_path).startswith(str(export_dir)):
-                raise HTTPException(status_code=404, detail="File not found")
+        if not file_path.is_file() or not str(file_path).startswith(str(export_dir)):
+            raise HTTPException(status_code=404, detail="File not found")
 
-            file_path.unlink()
-            logger.info(f"Deleted export file: {filename}")
-            return {"message": f"File {filename} deleted successfully"}
+        file_path.unlink()
+        logger.info(f"Deleted export file: {filename}")
+        return {"message": f"File {filename} deleted successfully"}
 
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error deleting file: {e}")
-            raise HTTPException(status_code=500, detail=f"Error deleting file: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting file: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting file: {e}")
 
 def main():
     """Main entry point for production server"""
