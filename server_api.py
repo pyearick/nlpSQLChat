@@ -1,12 +1,15 @@
 # server_api.py - Cleaned up version without TokenManager
 
-import os
-import sys
-import asyncio
-import logging
 import time
+import os
+import subprocess
+import socket
+import sys
+import logging
+import uvicorn
 from pathlib import Path
 from typing import Optional
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -20,36 +23,31 @@ from src.kernel import Kernel
 from src.orchestrator import Orchestrator
 from src.database.secure_service import create_database_service, get_database_credentials, SecureDatabase
 
-# Load environment variables FIRST
-load_dotenv()
-
 # Configure logging
 def setup_production_logging():
     """Setup logging for Windows service environment"""
-
-    # Use the standard server log directory
     log_dir = Path("C:/Logs")
     log_dir.mkdir(exist_ok=True)
-
-    # Log file with rotation
     log_file = log_dir / "voice_sql_api.log"
-
-    # Configure logging
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(logging.Formatter(
+        "[%(asctime)s - %(name)s:%(lineno)d - %(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    ))
+    # Force UTF-8 encoding for console
+    console_handler.stream = open(sys.stdout.fileno(), mode='w', encoding='utf-8', errors='replace')
     logging.basicConfig(
         level=logging.INFO,
         format="[%(asctime)s - %(name)s:%(lineno)d - %(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
-            logging.FileHandler(log_file, mode='a'),
-            logging.StreamHandler(sys.stdout)
+            logging.FileHandler(log_file, mode='a', encoding='utf-8'),
+            console_handler
         ]
     )
-
-    # Prevent excessive logging from some libraries
     logging.getLogger("azure").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-
     return logging.getLogger(__name__)
 
 # Initialize logging first
@@ -61,6 +59,55 @@ app = FastAPI(
     version="1.0.0",
     description="Production Voice SQL API Service"
 )
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic
+    global kernel, chat_history
+    try:
+        logger.info("Starting Voice SQL API server...")
+        config = load_environment_config()
+        database_service = initialize_database_service(config)
+        logger.info("Database connection successful")
+        credential, speech_service = initialize_azure_services(config)
+        logger.info("Azure credentials initialized")
+        if credential and config['openai_endpoint'] and config['openai_deployment_name']:
+            try:
+                kernel = Kernel(
+                    database_service=database_service,
+                    credential=credential,
+                    openai_endpoint=config['openai_endpoint'],
+                    openai_deployment_name=config['openai_deployment_name']
+                )
+                logger.info("Semantic kernel initialized with automatic token refresh")
+            except Exception as e:
+                logger.error(f"AI kernel initialization failed: {e}", exc_info=True)
+                logger.info("Falling back to simple kernel")
+                kernel = SimpleKernel(database_service=database_service)
+        else:
+            logger.info("Using simple kernel (no AI services)")
+            kernel = SimpleKernel(database_service=database_service)
+        chat_history = ChatHistory()
+        logger.info("Voice SQL API server ready!")
+        logger.info(f"   Database: {config['database_name']} on {config['server_name']}")
+        logger.info(f"   Security: {'Authenticated user' if config['db_username'] else 'Trusted connection'}")
+        logger.info(f"   AI: {'Enabled with auto token refresh' if hasattr(kernel, 'chat_completion') else 'Disabled'}")
+        logger.info(f"   Speech: {'Enabled' if speech_service else 'Disabled'}")
+    except Exception as e:
+        logger.error(f"Critical startup failure: {e}", exc_info=True)
+        try:
+            config = load_environment_config()
+            database_service = initialize_database_service(config)
+            kernel = SimpleKernel(database_service=database_service)
+            chat_history = ChatHistory()
+            logger.info("Minimal server functionality initialized")
+        except Exception as minimal_error:
+            logger.error(f"Even minimal initialization failed: {minimal_error}", exc_info=True)
+            raise
+    yield  # Application runs here
+    # Shutdown logic
+    logger.info("Voice SQL API server shutting down...")
+
+app = FastAPI(lifespan=lifespan)
 
 # Global variables
 kernel = None
@@ -178,7 +225,7 @@ def initialize_database_service(config):
 
         # Test connection
         if database_service.test_connection():
-            logger.info("✅ Database connection successful")
+            logger.info("Database connection successful")
             return database_service
         else:
             raise Exception("Database connection test failed")
@@ -196,7 +243,7 @@ def initialize_azure_services(config):
     try:
         if config['openai_endpoint'] and config['openai_deployment_name']:
             credential = DefaultAzureCredential()
-            logger.info("✅ Azure credentials initialized")
+            logger.info("Azure credentials initialized")
         else:
             logger.info("Azure OpenAI not configured")
     except Exception as e:
@@ -210,77 +257,11 @@ def initialize_azure_services(config):
                 resource_id=config['speech_service_id'],
                 region=config['azure_location']
             )
-            logger.info("✅ Speech service initialized")
+            logger.info("Speech service initialized")
     except Exception as e:
         logger.warning(f"Speech service initialization failed: {e}")
 
     return credential, speech_service
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the application on startup"""
-    global kernel, chat_history
-
-    try:
-        logger.info("🚀 Starting Voice SQL API server...")
-
-        # Load configuration
-        config = load_environment_config()
-
-        # Initialize database service
-        database_service = initialize_database_service(config)
-
-        # Initialize Azure services (optional)
-        credential, speech_service = initialize_azure_services(config)
-
-        # Initialize the semantic kernel (now with built-in token refresh)
-        if credential and config['openai_endpoint'] and config['openai_deployment_name']:
-            try:
-                kernel = Kernel(
-                    database_service=database_service,
-                    credential=credential,
-                    openai_endpoint=config['openai_endpoint'],
-                    openai_deployment_name=config['openai_deployment_name']
-                )
-                logger.info("✅ Semantic kernel initialized with automatic token refresh")
-            except Exception as e:
-                logger.error(f"AI kernel initialization failed: {e}")
-                logger.info("Falling back to simple kernel")
-                kernel = SimpleKernel(database_service=database_service)
-        else:
-            logger.info("Using simple kernel (no AI services)")
-            kernel = SimpleKernel(database_service=database_service)
-
-        # Initialize chat history
-        chat_history = ChatHistory()
-
-        # Log startup summary
-        username = config['db_username'] or "trusted_connection"
-        logger.info("✅ Voice SQL API server ready!")
-        logger.info(f"   Database: {config['database_name']} on {config['server_name']}")
-        logger.info(f"   Security: {'Authenticated user' if config['db_username'] else 'Trusted connection'}")
-        logger.info(f"   AI: {'Enabled with auto token refresh' if hasattr(kernel, 'chat_completion') else 'Disabled'}")
-        logger.info(f"   Speech: {'Enabled' if speech_service else 'Disabled'}")
-
-    except Exception as e:
-        logger.error(f"❌ Critical startup failure: {e}")
-        # Create minimal functionality
-        try:
-            config = load_environment_config()
-            database_service = initialize_database_service(config)
-            kernel = SimpleKernel(database_service=database_service)
-            chat_history = ChatHistory()
-            logger.info("✅ Minimal server functionality initialized")
-        except Exception as minimal_error:
-            logger.error(f"❌ Even minimal initialization failed: {minimal_error}")
-            raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    global shutdown_requested
-    shutdown_requested = True
-    logger.info("Voice SQL API server shutting down...")
 
 # Health and status endpoints
 @app.get("/")
@@ -483,34 +464,46 @@ async def delete_export(filename: str):
 
 def main():
     """Main entry point for production server"""
-    import uvicorn
-
     try:
+        # Check and free port 8000
+        logger.info("Checking for processes on port 8000...")
+        try:
+            result = subprocess.run(
+                'netstat -aon | findstr :8000 | findstr LISTENING',
+                shell=True, capture_output=True, text=True
+            )
+            if result.stdout:
+                for line in result.stdout.splitlines():
+                    pid = line.split()[-1]
+                    logger.info(f"Terminating process with PID {pid} on port 8000")
+                    subprocess.run(f'taskkill /PID {pid} /F', shell=True)
+        except Exception as e:
+            logger.warning(f"Failed to check or free port 8000: {e}")
+
         # Load configuration
         config = load_environment_config()
-
         logger.info(f"Starting production server on {config['server_host']}:{config['server_port']}")
         logger.info(f"Process ID: {os.getpid()}")
         logger.info(f"Working directory: {os.getcwd()}")
-
-        # Run the server
         uvicorn.run(
             "server_api:app",
             host=config['server_host'],
             port=config['server_port'],
-            reload=False,  # Never reload in production
+            reload=False,
             log_level="info",
-            access_log=True
+            access_log=True,
+            workers=1
         )
-
     except KeyboardInterrupt:
         logger.info("Server shutdown requested by user")
     except Exception as e:
-        logger.error(f"Critical server error: {e}")
-        logger.error("Server will exit and be restarted by Task Scheduler")
-        sys.exit(1)  # Exit with error code so Task Scheduler restarts
+        logger.error(f"Critical server error: {e}", exc_info=True)
+        sys.exit(1)
     finally:
         logger.info("Server process ending")
+        # Ensure port is released
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.close()
 
 if __name__ == "__main__":
     main()
