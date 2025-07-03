@@ -18,32 +18,34 @@ from semantic_kernel.contents.chat_history import ChatHistory
 from src.kernel.service import Kernel
 from src.database.secure_service import create_database_service, get_database_credentials, SecureDatabase
 
-
 # Configure logging
 def setup_production_logging():
     log_dir = Path("C:/Logs")
     log_dir.mkdir(exist_ok=True)
     log_file = log_dir / "voice_sql_api.log"
+    # Remove existing handlers to prevent duplicates
+    for handler in logging.getLogger().handlers[:]:
+        logging.getLogger().removeHandler(handler)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(logging.Formatter(
         "[%(asctime)s - %(name)s:%(lineno)d - %(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     ))
     console_handler.stream = open(sys.stdout.fileno(), mode='w', encoding='utf-8', errors='replace')
+    file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+    file_handler.setFormatter(logging.Formatter(
+        "[%(asctime)s - %(name)s:%(lineno)d - %(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    ))
     logging.basicConfig(
         level=logging.INFO,
-        format="[%%(asctime)s - %%(name)s:%%(lineno)d - %%(levelname)s] %%(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(log_file, mode='a', encoding='utf-8'),
-            console_handler
-        ]
+        handlers=[file_handler, console_handler]
     )
     logging.getLogger("azure").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn").setLevel(logging.WARNING)  # Suppress Uvicorn logs
     return logging.getLogger(__name__)
-
 
 logger = setup_production_logging()
 
@@ -57,27 +59,22 @@ kernel = None
 chat_history = None
 shutdown_requested = False
 
-
 class QueryRequest(BaseModel):
     question: str
     export_format: Optional[str] = None  # 'csv', 'txt', or None for display
-
 
 class QueryResponse(BaseModel):
     answer: str
     status: str = "success"
 
-
 class SimpleKernel:
     """Fallback kernel for when AI services aren't available, with basic NLP"""
-
     def __init__(self, database_service):
         self.database_service = database_service
 
     async def message(self, user_input: str, chat_history: ChatHistory) -> str:
         """Process natural language queries with basic parsing"""
         try:
-            # Normalize input
             user_input = user_input.lower().strip()
             logger.info(f"SimpleKernel processing query: {user_input}")
 
@@ -89,7 +86,7 @@ class SimpleKernel:
                 sql_query = f"SELECT COUNT(*) FROM {table_name}"
                 result = self.database_service.query(sql_query)
                 if isinstance(result, str):
-                    return result  # Error message
+                    return result
                 elif result and isinstance(result[0], tuple):
                     count = result[0][0]
                     return f"The table {table_name} has {count:,} records."
@@ -102,7 +99,7 @@ class SimpleKernel:
             if select_match:
                 columns = select_match.group(1).replace(" ", "").split(",")
                 table_name = select_match.group(2)
-                sql_query = f"SELECT {', '.join(columns)} FROM {table_name} WHERE ROWNUM <= 3"  # Limit to 3 rows
+                sql_query = f"SELECT {', '.join(columns)} FROM {table_name} WHERE ROWNUM <= 3"
                 result = self.database_service.query(sql_query)
                 if isinstance(result, str):
                     return result
@@ -111,13 +108,11 @@ class SimpleKernel:
                 else:
                     return f"No records found in table {table_name}."
 
-            # If query is unrecognized
             return "Sorry, I couldn't understand your query. Try something like 'how many records in [table]' or 'show [columns] from [table]'."
 
         except Exception as e:
             logger.error(f"SimpleKernel error: {e}")
             return f"Error executing query: {str(e)}"
-
 
 def load_environment_config():
     env_paths = [
@@ -156,7 +151,6 @@ def load_environment_config():
     logger.info(f"  Server: {config['server_host']}:{config['server_port']}")
     return config
 
-
 def initialize_database_service(config):
     try:
         if config['db_username'] and config['db_password']:
@@ -180,8 +174,8 @@ def initialize_database_service(config):
             else:
                 logger.warning("No credentials found - using trusted connection")
                 database_service = create_database_service(
-                    config['server_name'],
-                    config['database_name']
+                    server_name=config['server_name'],
+                    database_name=config['database_name']
                 )
         if database_service.test_connection():
             logger.info("Database connection successful")
@@ -191,7 +185,6 @@ def initialize_database_service(config):
     except Exception as e:
         logger.error(f"Failed to initialize database service: {e}")
         raise
-
 
 def initialize_azure_services(config):
     try:
@@ -205,7 +198,6 @@ def initialize_azure_services(config):
     except Exception as e:
         logger.warning(f"Azure credential initialization failed: {e}")
         return None
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -253,9 +245,7 @@ async def lifespan(app: FastAPI):
     global shutdown_requested
     shutdown_requested = True
 
-
 app = FastAPI(lifespan=lifespan)
-
 
 @app.get("/")
 async def root():
@@ -264,7 +254,6 @@ async def root():
         "status": "healthy",
         "mode": "production"
     }
-
 
 @app.get("/health")
 async def health_check():
@@ -296,7 +285,6 @@ async def health_check():
         logger.error(f"Health check error: {e}")
         raise HTTPException(status_code=500, detail="Health check failed")
 
-
 @app.post("/ask")
 async def ask_question(request: QueryRequest) -> QueryResponse:
     try:
@@ -317,7 +305,6 @@ async def ask_question(request: QueryRequest) -> QueryResponse:
     except Exception as e:
         logger.error(f"Error processing question: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
-
 
 @app.get("/status")
 async def get_detailed_status():
@@ -349,7 +336,6 @@ async def get_detailed_status():
     except Exception as e:
         logger.error(f"Status check failed: {e}")
         raise HTTPException(status_code=500, detail="Status check failed")
-
 
 @app.get("/exports")
 async def list_exports():
@@ -384,7 +370,6 @@ async def list_exports():
         logger.error(f"Error listing exports: {e}")
         raise HTTPException(status_code=500, detail=f"Error listing exports: {e}")
 
-
 @app.get("/download/{filename}")
 async def download_export(filename: str):
     try:
@@ -405,7 +390,6 @@ async def download_export(filename: str):
         logger.error(f"Error downloading file: {e}")
         raise HTTPException(status_code=500, detail=f"Error downloading file: {e}")
 
-
 @app.delete("/exports/{filename}")
 async def delete_export(filename: str):
     try:
@@ -422,23 +406,8 @@ async def delete_export(filename: str):
         logger.error(f"Error deleting file: {e}")
         raise HTTPException(status_code=500, detail=f"Error deleting file: {e}")
 
-
 def main():
     try:
-        logger.info("Checking for processes on port 8000...")
-        try:
-            result = subprocess.run(
-                'netstat -aon | findstr :8000 | findstr LISTENING',
-                shell=True, capture_output=True, text=True
-            )
-            if result.stdout:
-                for line in result.stdout.splitlines():
-                    pid = line.split()[-1]
-                    logger.info(f"Terminating process with PID {pid} on port 8000")
-                    subprocess.run(f'taskkill /PID {pid} /F', shell=True)
-        except Exception as e:
-            logger.warning(f"Failed to check or free port 8000: {e}")
-
         config = load_environment_config()
         logger.info(f"Starting production server on {config['server_host']}:{config['server_port']}")
         logger.info(f"Process ID: {os.getpid()}")
@@ -447,8 +416,8 @@ def main():
             host=config['server_host'],
             port=config['server_port'],
             reload=False,
-            log_level="info",
-            access_log=True,
+            log_level="warning",  # Reduce Uvicorn logging
+            access_log=False,     # Disable Uvicorn access log
             workers=1
         )
     except KeyboardInterrupt:
@@ -460,7 +429,6 @@ def main():
         logger.info("Server process ending")
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.close()
-
 
 if __name__ == "__main__":
     main()
