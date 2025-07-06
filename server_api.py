@@ -1,7 +1,5 @@
 import time
 import os
-import subprocess
-import socket
 import sys
 import logging
 import uvicorn
@@ -23,9 +21,7 @@ def setup_production_logging():
     log_dir = Path("C:/Logs")
     log_dir.mkdir(exist_ok=True)
     log_file = log_dir / "voice_sql_api.log"
-    # Remove existing handlers to prevent duplicates
-    for handler in logging.getLogger().handlers[:]:
-        logging.getLogger().removeHandler(handler)
+    logging.getLogger().handlers.clear()  # Prevent duplicate handlers
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(logging.Formatter(
         "[%(asctime)s - %(name)s:%(lineno)d - %(levelname)s] %(message)s",
@@ -37,10 +33,7 @@ def setup_production_logging():
         "[%(asctime)s - %(name)s:%(lineno)d - %(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     ))
-    logging.basicConfig(
-        level=logging.INFO,
-        handlers=[file_handler, console_handler]
-    )
+    logging.basicConfig(level=logging.INFO, handlers=[console_handler, file_handler])
     logging.getLogger("azure").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -174,8 +167,8 @@ def initialize_database_service(config):
             else:
                 logger.warning("No credentials found - using trusted connection")
                 database_service = create_database_service(
-                    server_name=config['server_name'],
-                    database_name=config['database_name']
+                    config['server_name'],
+                    config['database_name']
                 )
         if database_service.test_connection():
             logger.info("Database connection successful")
@@ -416,8 +409,8 @@ def main():
             host=config['server_host'],
             port=config['server_port'],
             reload=False,
-            log_level="warning",  # Reduce Uvicorn logging
-            access_log=False,     # Disable Uvicorn access log
+            log_level="warning",
+            access_log=False,
             workers=1
         )
     except KeyboardInterrupt:

@@ -125,13 +125,13 @@ class DatabasePlugin:
             row_count = len(result)
 
             # Return a download-ready message
-            return (f"✅ Exported {row_count:,} rows to {file_format.upper()} format. "
+            return (f"Exported {row_count:,} rows to {file_format.upper()} format. "
                     f"File: {filename} "
                     f"Ready for download from server.")
 
         except Exception as e:
             logger.error(f"Export failed: {e}")
-            return f"❌ Export failed: {e}"
+            return f"Export failed: {e}"
 
     @kernel_function(
         name="query",
@@ -178,7 +178,7 @@ class DatabasePlugin:
         estimated_rows = self._estimate_row_count(query)
 
         if estimated_rows > self.max_display_rows:
-            return (f"⚠️ WARNING: This query will return approximately {estimated_rows:,} rows, "
+            return (f"WARNING: This query will return approximately {estimated_rows:,} rows, "
                     f"which is too large to display. Consider:\n"
                     f"1. Adding 'TOP {self.max_display_rows}' to see a sample\n"
                     f"2. Adding WHERE conditions to filter the data\n"
@@ -190,7 +190,7 @@ class DatabasePlugin:
 
         # Check actual result size even if estimation failed
         if isinstance(result, list) and len(result) > self.max_display_rows:
-            return (f"⚠️ Query returned {len(result):,} rows (showing first {self.max_display_rows}):\n\n" +
+            return (f"Query returned {len(result):,} rows (showing first {self.max_display_rows}):\n\n" +
                     str(result[:self.max_display_rows]) +
                     f"\n\n... and {len(result) - self.max_display_rows:,} more rows. "
                     f"Ask me to 'export full results to CSV' if you need all data.")
@@ -243,16 +243,19 @@ class DatabasePlugin:
 
             if result:
                 row_count = result[0][0]
+                # In get_table_size method
+                logger.info(
+                    f"Table '{table_name}' contains {row_count:,} rows. WARNING: Very large - Use specific WHERE conditions or TOP N")
 
                 # Provide context about query performance
                 if row_count > 1000000:
-                    size_context = "⚠️ VERY LARGE - Use specific WHERE conditions or TOP N"
+                    size_context = "VERY LARGE - Use specific WHERE conditions or TOP N"
                 elif row_count > 100000:
-                    size_context = "⚠️ LARGE - Consider using TOP N for faster queries"
+                    size_context = "LARGE - Consider using TOP N for faster queries"
                 elif row_count > 10000:
-                    size_context = "✅ MEDIUM - Good for most queries"
+                    size_context = "MEDIUM - Good for most queries"
                 else:
-                    size_context = "✅ SMALL - Fast for any query"
+                    size_context = "SMALL - Fast for any query"
 
                 return f"Table '{table_name}' contains {row_count:,} rows. {size_context}"
             else:
