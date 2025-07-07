@@ -133,29 +133,104 @@ class DatabasePlugin:
             logger.error(f"Export failed: {e}")
             return f"Export failed: {e}"
 
+    # Enhanced src/plugins/database_plugin.py - Add LIKE search guidance
+
+    # Enhanced src/plugins/database_plugin.py - Add ProdGroupDes and fix product searches
+
     @kernel_function(
         name="query",
         description=(
                 "Query the CRPAF database using SQL Server syntax. "
                 "IMPORTANT: Only query these approved production tables: "
-                "- ebayWT: Contains all eBay records pulled from the eBay API with complete auction data (LARGE TABLE - 2M+ records) "
-                "- ebayWT_NF: Contains eBay auctions that are selling (DeltaSold field shows sales) for OEANs we do not carry in our inventory "
-                "- ebayNF_SupplierMatch: Contains eBay auctions for parts we don't carry, with additional supplier, pricing, and parts data when available. NOTE: Supplier/pricing fields may be NULL when no matching data exists "
-                "DO NOT query any tables with these patterns: "
+
+                "ACTUAL SALES DATA (INVOICE-BASED): "
+                "- pmsalespbi: ACTUAL INVOICE SALES DATA by customer (PRIMARY SALES TABLE). "
+                "  Key columns: CaptureDate, Company, CustomerGroup, CustomerName, Product, ProductCategoryID, "
+                "  ProdDivID, ProdGroupID, ProdGroupDes, Quantity, Sales, Cost, Margin, InvMonth, InvQuarter, InvWeek, InvYear, InvDate "
+                "  Use this table when users ask about 'sales to customers', 'how much did we sell', 'revenue', 'margins', 'product categories' "
+
+                "EBAY MARKET DATA (COMPETITIVE INTELLIGENCE): "
+                "- ebayWT: eBay auction listings (LARGE TABLE - 2M+ records). Market pricing data. "
+                "  Key columns: OEAN, Price, Quantity, CaptureDate, SellerID, Title, EndTime "
+                "- ebayWT_NF: eBay auctions for parts NOT in our inventory (competitive analysis). "
+                "  Key columns: OEAN, DeltaSold (sales indicator), SoldPrice, SoldDate "
+                "- ebayNF_SupplierMatch: Competitor parts with supplier matching data. "
+                "  Key columns: OEAN, SupplierName, SupplierPrice, PartDescription (NOTE: Supplier fields may be NULL) "
+
+                "CRITICAL SEARCH PATTERNS: "
+                "- ALWAYS use LIKE with wildcards for customer AND product searches "
+                "- Customer names often have variations (e.g., 'Autozone', 'Autozone USA', 'AutoZone Inc') "
+                "- Product names/descriptions often have variations (e.g., 'AAE-HPS Racks', 'AAE-HPS Pumps') "
+                "- Use pattern: WHERE CustomerName LIKE '%AUTOZONE%' AND Product LIKE '%AAE-HPS%' "
+                "- For product category analysis: Use ProdGroupDes LIKE '%RACK%' or '%PUMP%' "
+                "- Case insensitive searches: Use UPPER() function for consistency "
+
+                "SEARCH STRATEGY: "
+                "1. For customer searches: WHERE UPPER(CustomerName) LIKE '%[CUSTOMER]%' "
+                "2. For product searches: WHERE UPPER(Product) LIKE '%[PRODUCT]%' OR UPPER(ProdGroupDes) LIKE '%[CATEGORY]%' "
+                "3. For product categories: GROUP BY ProdGroupDes to see category performance "
+                "4. If no results, suggest checking spelling or trying broader search terms "
+
+                "PRODUCT CATEGORY ANALYSIS (ProdGroupDes): "
+                "- ProdGroupDes shows product categories (e.g., 'AAE-HPS Pumps', 'Oil Filters', 'Brake Parts') "
+                "- Use for questions like 'best selling product category', 'pump sales', 'filter performance' "
+                "- Query pattern: SELECT ProdGroupDes, SUM(Sales), SUM(Quantity) FROM pmsalespbi GROUP BY ProdGroupDes ORDER BY SUM(Sales) DESC "
+                "- For specific categories: WHERE UPPER(ProdGroupDes) LIKE '%PUMP%' OR '%RACK%' OR '%FILTER%' "
+
+                "TABLE USAGE GUIDELINES: "
+                "- For customer sales questions → Use pmsalespbi with CustomerName LIKE "
+                "- For product/category sales → Use pmsalespbi with Product LIKE or ProdGroupDes LIKE "
+                "- For product category analysis → Use pmsalespbi GROUP BY ProdGroupDes "
+                "- For market pricing questions → Use ebayWT/ebayWT_NF "
+                "- For competitive analysis → Use ebayNF_SupplierMatch "
+
+                "COLUMN DETAILS: "
+                "- CustomerName: Individual customer names (use LIKE for searches) "
+                "- CustomerGroup: Customer category/grouping "
+                "- Product: Specific part/product identifier (use LIKE for searches) "
+                "- ProdGroupDes: Product category description - KEY for category analysis "
+                "- Sales: Revenue amount "
+                "- Quantity: Units sold "
+                "- Margin: Profit margin "
+                "- InvDate/CaptureDate: Transaction dates "
+
+                "EXAMPLE IMPROVED QUERIES: "
+                "- Customer sales: SELECT CustomerName, SUM(Sales), SUM(Quantity) FROM pmsalespbi WHERE UPPER(CustomerName) LIKE '%AUTOZONE%' GROUP BY CustomerName "
+                "- Product sales: SELECT Product, ProdGroupDes, SUM(Sales), SUM(Quantity) FROM pmsalespbi WHERE UPPER(Product) LIKE '%AAE-HPS%' GROUP BY Product, ProdGroupDes "
+                "- Category performance: SELECT ProdGroupDes, SUM(Sales) as TotalSales, SUM(Quantity) as TotalQty FROM pmsalespbi GROUP BY ProdGroupDes ORDER BY TotalSales DESC "
+                "- Best selling racks: SELECT Product, SUM(Sales), SUM(Quantity) FROM pmsalespbi WHERE UPPER(ProdGroupDes) LIKE '%RACK%' GROUP BY Product ORDER BY SUM(Sales) DESC "
+                "- Pump sales by customer: SELECT CustomerName, SUM(Sales) FROM pmsalespbi WHERE UPPER(ProdGroupDes) LIKE '%PUMP%' GROUP BY CustomerName ORDER BY SUM(Sales) DESC "
+                "- Monthly category trends: SELECT ProdGroupDes, InvMonth, InvYear, SUM(Sales) FROM pmsalespbi WHERE UPPER(ProdGroupDes) LIKE '%FILTER%' GROUP BY ProdGroupDes, InvMonth, InvYear "
+
+                "WHEN USER SEARCHES FOR PRODUCTS: "
+                "- First try Product LIKE '%[searchterm]%' "
+                "- If no results, try ProdGroupDes LIKE '%[searchterm]%' "
+                "- Examples: 'AAE-HPS Racks' → try Product LIKE '%AAE-HPS%' AND ProdGroupDes LIKE '%RACK%' "
+                "- 'best selling pumps' → ProdGroupDes LIKE '%PUMP%' GROUP BY Product "
+
+                "FORBIDDEN TABLE PATTERNS: "
                 "- Tables ending in '_backup', '_temp', '_staging', '_work' "
                 "- Tables starting with 'temp_', 'backup_', 'old_', 'archive_' "
                 "- Any table containing 'test', 'dev', 'intermediate' in the name "
-                "LARGE RESULT HANDLING: "
-                "- For queries that might return many rows (>100), always suggest using TOP N to limit results "
-                "- If user asks for 'all records' from large tables, offer to export to file instead "
-                "- Use SELECT TOP 10 or TOP 100 for initial data exploration "
-                "Use SELECT TOP N instead of LIMIT N for row limiting. "
-                "Use CONVERT or CAST for date formats. "
-                "When identifying newest records, assume 'CaptureDate' column unless told otherwise. "
-                "Handle NULL values appropriately when querying supplier/pricing data in ebayNF_SupplierMatch. "
-                "Always use proper SQL Server syntax and reference only the approved production tables listed above."
+                "- Tables not explicitly listed in the approved list above "
+
+                "QUERY BEST PRACTICES: "
+                "- For large result sets (>100 rows), use SELECT TOP N to limit results "
+                "- Use InvDate for sales data timestamps (pmsalespbi) "
+                "- Use CaptureDate for eBay data timestamps "
+                "- Use proper SQL Server syntax (SELECT TOP N, not LIMIT N) "
+                "- Handle NULL values appropriately "
+                "- ALWAYS use LIKE with % wildcards for name/text searches unless user specifies exact match "
+                "- Use UPPER() function for case-insensitive searches "
+                "- For product searches, try both Product and ProdGroupDes columns "
+
+                "When users ask about sales, revenue, customers, or 'how much did we sell', use pmsalespbi as the primary source with LIKE pattern matching. "
+                "When users ask about product categories or 'best selling [category]', use ProdGroupDes for grouping and analysis. "
+                "When users ask about market pricing or competitive data, use the eBay tables. "
+                "If a search returns no results, automatically suggest and try LIKE pattern searches with partial matches in both Product and ProdGroupDes columns."
         )
     )
+
     def query(self, query: Annotated[str, "The SQL query"]) -> Annotated[
         Union[List[pyodbc.Row], str], "The rows returned or a message"]:
         logger.info(f"Running database plugin with query: {query}")
@@ -198,14 +273,47 @@ class DatabasePlugin:
         print(f">> DB RESULT: {result}")
         return result
 
+    # Add a helper function for the AI to use when searches return no results
     @kernel_function(
-        name="export_query_to_csv",
+        name="suggest_similar_matches",
         description=(
-                "Export query results to a CSV file when the dataset is too large to display. "
-                "Use this when users ask for 'all records' or when a query returns more than 100 rows. "
-                "The file will be saved to the server's export directory."
+                "When a customer or product search returns no results, use this to find similar matches. "
+                "Helps users discover the correct customer/product names in the database."
         )
     )
+    def suggest_similar_matches(self,
+                                search_term: Annotated[str, "The customer or product name that returned no results"]) -> \
+    Annotated[str, "Suggested similar matches"]:
+        """Find similar customer or product names when exact search fails"""
+        try:
+            # Try to find similar customer names
+            customer_query = f"SELECT DISTINCT TOP 10 CustomerName FROM pmsalespbi WHERE UPPER(CustomerName) LIKE '%{search_term.upper()}%' ORDER BY CustomerName"
+            customer_result = self.db.query(customer_query)
+
+            # Try to find similar product names
+            product_query = f"SELECT DISTINCT TOP 10 Product FROM pmsalespbi WHERE UPPER(Product) LIKE '%{search_term.upper()}%' ORDER BY Product"
+            product_result = self.db.query(product_query)
+
+            suggestions = []
+
+            if customer_result and not isinstance(customer_result, str) and len(customer_result) > 0:
+                customer_names = [row[0] for row in customer_result]
+                suggestions.append(f"Similar customer names found: {', '.join(customer_names)}")
+
+            if product_result and not isinstance(product_result, str) and len(product_result) > 0:
+                product_names = [row[0] for row in product_result]
+                suggestions.append(f"Similar product names found: {', '.join(product_names)}")
+
+            if suggestions:
+                return "I found these similar matches:\n" + "\n".join(
+                    suggestions) + "\n\nWould you like me to search for any of these instead?"
+            else:
+                return f"No similar matches found for '{search_term}'. Try using fewer letters or check the spelling."
+
+        except Exception as e:
+            logger.error(f"Error in suggest_similar_matches: {e}")
+            return f"Error searching for similar matches: {e}"
+
     def export_query_to_csv(self, query: Annotated[str, "The SQL query to export"]) -> Annotated[
         str, "Export status message"]:
         logger.info(f"Exporting query to CSV: {query}")

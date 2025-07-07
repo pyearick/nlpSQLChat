@@ -424,21 +424,19 @@ class VoiceClientGUI:
             self.stop_all_speech()
             self.stop_btn.config(text="▶️ RESUME")
             self.voice_status.config(text="Speech paused")
+        elif hasattr(self, 'paused_text') and self.paused_text:
+            # We have paused text - resume it
+            self.stop_btn.config(text="⏸️ PAUSE")
+            self.speak_text(self.paused_text, resume=True)
+        elif hasattr(self, 'last_response') and self.last_response:
+            # No paused text but we have a last response - restart from beginning
+            self.log_message("Restarting speech from beginning", "system")
+            self.start_speech(self.last_response)
         else:
-            # Currently paused or stopped - check if we have paused text to resume
-            if self.paused_text and hasattr(self, 'remaining_sentences') and self.remaining_sentences:
-                # Resume from where we left off
-                self.stop_btn.config(text="⏸️ PAUSE")
-                self.speak_text(self.paused_text, resume=True)
-            elif hasattr(self, 'last_response') and self.last_response:
-                # No paused text, but we have a last response - restart from beginning
-                self.stop_btn.config(text="⏸️ PAUSE")
-                self.paused_text = None  # Clear any stale paused text
-                self.speak_text(self.last_response)
-            else:
-                # Nothing to speak
-                self.log_message("Nothing to resume or speak", "system")
-                self.stop_btn.config(text="⏹️ STOP")
+            # Nothing to speak
+            self.log_message("Nothing to resume or speak", "system")
+            self.stop_btn.config(text="⏹️ STOP")
+            self.voice_status.config(text="Ready")
 
     def speak_text(self, text, resume=False):
         """Enhanced speak text with interruption and resume support"""
@@ -630,6 +628,26 @@ class VoiceClientGUI:
 
         self.log_message("⏹️ Speech stopped", "system")
 
+    def start_speech(self, text):
+        """Start speech with proper state initialization"""
+        if not self.tts_engine:
+            self.log_message("Text-to-speech not available", "error")
+            return
+
+        # Reset all speech state
+        self.is_speaking = False
+        self.stop_speech_requested = False
+        self.paused_text = None
+        self.remaining_sentences = None
+        self.current_sentence_index = 0
+
+        # Update UI to show we're starting
+        self.voice_status.config(text="Preparing to speak...")
+        self.stop_btn.config(text="⏸️ PAUSE", state=tk.NORMAL)
+
+        # Start speaking
+        self.speak_text(text)
+
     def speak_last_response(self):
         """Speak the last assistant response"""
         if hasattr(self, 'last_response') and self.last_response:
@@ -638,8 +656,7 @@ class VoiceClientGUI:
                 self.stop_all_speech()
                 time.sleep(0.1)
 
-            self.paused_text = None  # Clear any paused text
-            self.speak_text(self.last_response)
+            self.start_speech(self.last_response)
         else:
             self.log_message("No response to speak", "system")
 
@@ -777,7 +794,7 @@ class VoiceClientGUI:
 
         # Auto-speak if enabled and not already speaking
         elif self.auto_speak_responses.get() and self.tts_engine and not self.is_speaking:
-            self.speak_text(response)
+            self.start_speech(response)
 
     def is_export_response(self, response):
         """Check if response indicates a file export"""
@@ -1048,8 +1065,13 @@ class VoiceClientGUI:
 
         threading.Thread(target=get_downloads, daemon=True).start()
 
+    # Add this debug version to your show_downloads_window method
+
     def show_downloads_window(self, exports):
         """Display available downloads in a window"""
+        print(f"🔍 DEBUG: show_downloads_window called with {len(exports)} exports")
+        print(f"🔍 DEBUG: First export: {exports[0] if exports else 'None'}")
+
         download_window = tk.Toplevel(self.root)
         download_window.title("Available Downloads")
         download_window.geometry("700x400")
@@ -1083,17 +1105,42 @@ class VoiceClientGUI:
         tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Populate list
-        if exports:
-            for export in exports:
-                size_mb = export['size_mb']
-                created = datetime.fromtimestamp(export['created']).strftime("%Y-%m-%d %H:%M")
-                tree.insert(tk.END, values=(export['filename'], size_mb, created))
-        else:
-            # Show message if no files
-            tree.insert(tk.END, values=("No export files found", "", ""))
+        # FIXED: Populate list with proper debugging
+        print(f"🔍 DEBUG: About to populate treeview with {len(exports)} items")
 
-        # Buttons
+        if exports:
+            for i, export in enumerate(exports):
+                try:
+                    filename = export['filename']
+                    size_mb = export['size_mb']
+                    created_timestamp = export['created']
+
+                    # Convert timestamp to readable date
+                    created = datetime.fromtimestamp(created_timestamp).strftime("%Y-%m-%d %H:%M")
+
+                    print(f"🔍 DEBUG: Inserting item {i}: {filename}, {size_mb} MB, {created}")
+
+                    # THE CRITICAL FIX: Use "" as parent, tk.END as index
+                    item_id = tree.insert("", tk.END, values=(filename, size_mb, created))
+                    print(f"🔍 DEBUG: Successfully inserted with ID: {item_id}")
+
+                except Exception as e:
+                    print(f"❌ ERROR: Failed to insert item {i}: {e}")
+                    print(f"❌ ERROR: Export data: {export}")
+        else:
+            print("🔍 DEBUG: No exports found, inserting placeholder")
+            tree.insert("", tk.END, values=("No export files found", "", ""))
+
+        # Verify what's in the treeview
+        children = tree.get_children()
+        print(f"🔍 DEBUG: Treeview now has {len(children)} children: {children}")
+
+        # Test: manually insert a row to verify treeview works
+        print("🔍 DEBUG: Testing manual insert...")
+        test_id = tree.insert("", tk.END, values=("TEST FILE", "1.0", "2025-07-07 12:00"))
+        print(f"🔍 DEBUG: Manual test insert ID: {test_id}")
+
+        # Buttons (rest of your existing code)
         button_frame = ttk.Frame(download_window)
         button_frame.pack(fill=tk.X, padx=10, pady=10)
 
@@ -1106,7 +1153,7 @@ class VoiceClientGUI:
             item = tree.item(selection[0])
             filename = item['values'][0]
 
-            if filename == "No export files found":
+            if filename == "No export files found" or filename == "TEST FILE":
                 return
 
             download_window.destroy()
@@ -1121,7 +1168,7 @@ class VoiceClientGUI:
             item = tree.item(selection[0])
             filename = item['values'][0]
 
-            if filename == "No export files found":
+            if filename == "No export files found" or filename == "TEST FILE":
                 return
 
             if messagebox.askyesno("Confirm Delete", f"Delete {filename} from server?"):
@@ -1221,279 +1268,6 @@ class VoiceClientGUI:
         ttk.Button(button_frame, text="Refresh",
                    command=lambda: [size_window.destroy(), self.show_table_sizes()]).pack(side=tk.RIGHT, padx=(0, 5))
 
-        def create_enhanced_input_area(self, parent):
-            """Enhanced input area with conversational quick response buttons"""
-            input_frame = ttk.LabelFrame(parent, text="Input", padding="5")
-            input_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-            input_frame.columnconfigure(0, weight=1)
-
-            # Text input with export options
-            text_input_frame = ttk.Frame(input_frame)
-            text_input_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
-            text_input_frame.columnconfigure(0, weight=1)
-
-            self.input_entry = ttk.Entry(text_input_frame, font=('Consolas', 10))
-            self.input_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
-            self.input_entry.bind('<Return>', self.send_message)
-            self.input_entry.bind('<Control-Return>', self.send_message)
-
-            # Send button and export options
-            send_frame = ttk.Frame(text_input_frame)
-            send_frame.grid(row=0, column=1)
-
-            self.send_btn = ttk.Button(send_frame, text="Send", command=self.send_message)
-            self.send_btn.grid(row=0, column=0, padx=(0, 2))
-
-            # Export options dropdown
-            self.export_var = tk.StringVar(value="Display")
-            export_menu = ttk.Combobox(send_frame, textvariable=self.export_var, width=10,
-                                       values=["Display", "Export CSV", "Export TXT"], state="readonly")
-            export_menu.grid(row=0, column=1)
-
-            # Quick response buttons frame (NEW)
-            self.quick_response_frame = ttk.LabelFrame(input_frame, text="Quick Responses", padding="5")
-            self.quick_response_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
-            self.quick_response_frame.columnconfigure(0, weight=1)
-
-            # Initially hidden
-            self.quick_response_frame.grid_remove()
-
-            # Voice controls (moved to row 2)
-            voice_frame = ttk.Frame(input_frame)
-            voice_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
-
-            self.voice_btn = ttk.Button(voice_frame, text="🎤 Start Voice Input", command=self.toggle_voice_input)
-            self.voice_btn.grid(row=0, column=0, padx=(0, 5))
-
-            # STOP/RESUME button
-            self.stop_btn = ttk.Button(voice_frame, text="⏹️ STOP", command=self.toggle_speech_pause,
-                                       style="Accent.TButton")
-            self.stop_btn.grid(row=0, column=1, padx=(0, 5))
-
-            self.speak_btn = ttk.Button(voice_frame, text="🔊 Read Last Response", command=self.speak_last_response)
-            self.speak_btn.grid(row=0, column=2, padx=(0, 10))
-
-            # Conversation controls (NEW)
-            conversation_frame = ttk.Frame(voice_frame)
-            conversation_frame.grid(row=0, column=3, padx=(10, 5))
-
-            self.reset_conversation_btn = ttk.Button(conversation_frame, text="🔄 New Topic",
-                                                     command=self.reset_conversation)
-            self.reset_conversation_btn.grid(row=0, column=0, padx=(0, 5))
-
-            # Voice status with more detailed feedback
-            self.voice_status = ttk.Label(voice_frame, text="Ready")
-            self.voice_status.grid(row=0, column=4, sticky=tk.W)
-
-            # File management buttons (moved to row 3)
-            file_frame = ttk.Frame(input_frame)
-            file_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
-
-            ttk.Button(file_frame, text="📁 Downloads", command=self.show_downloads).grid(row=0, column=0, padx=(0, 5))
-            ttk.Button(file_frame, text="📊 Table Sizes", command=self.show_table_sizes).grid(row=0, column=1,
-                                                                                             padx=(0, 5))
-
-        def extract_follow_up_options(self, response: str) -> List[str]:
-            """Extract follow-up options from AI response"""
-            options = []
-
-            # Look for numbered options
-            option_pattern = r'[-\*]\s*\*\*Option\s+\d+\*\*:\s*([^\n]+)'
-            matches = re.findall(option_pattern, response, re.IGNORECASE)
-
-            if matches:
-                options.extend(matches)
-            else:
-                # Look for bullet points after "Would you like to:"
-                if "would you like to:" in response.lower() or "you might want to:" in response.lower():
-                    lines = response.split('\n')
-                    in_options = False
-                    for line in lines:
-                        line = line.strip()
-                        if "would you like to:" in line.lower() or "you might want to:" in line.lower():
-                            in_options = True
-                            continue
-                        if in_options and line.startswith('-'):
-                            option_text = line[1:].strip()
-                            if option_text and len(option_text) > 5:
-                                options.append(option_text)
-                        elif in_options and not line.startswith('-') and line:
-                            break
-
-            return options[:4]  # Limit to 4 options
-
-        def handle_response(self, response):
-            """Enhanced response handler with follow-up options"""
-            self.log_message(response, "assistant")
-
-            # Store for repeat speaking
-            self.last_response = response
-
-            # Extract and create follow-up buttons
-            follow_ups = self.extract_follow_up_options(response)
-
-            if follow_ups:
-                self.create_quick_response_buttons(follow_ups)
-                self.conversation_active = True
-
-                # For voice mode, mention the options
-                if self.auto_speak_responses.get() and self.tts_engine and not self.is_speaking:
-                    # Speak the main response first
-                    self.speak_text(response)
-
-                    # Then mention options are available
-                    self.root.after(3000, lambda: self.speak_text(
-                        f"I've also prepared {len(follow_ups)} follow-up suggestions. "
-                        "You can click the buttons or say 'option 1', 'option 2', etc."
-                    ))
-            else:
-                # No follow-ups, clear any existing buttons
-                self.clear_quick_responses()
-
-                # Auto-speak if enabled and not already speaking
-                if self.auto_speak_responses.get() and self.tts_engine and not self.is_speaking:
-                    self.speak_text(response)
-
-            # Check if this is an export response that needs download
-            if self.is_export_response(response):
-                self.handle_export_download(response)
-
-        def enhanced_voice_workflow(self):
-            """Enhanced voice workflow with conversation awareness"""
-            if not self.conversation_active:
-                # Start fresh conversation
-                self.speak_text("Hello! I'm ready to help you analyze your data. What would you like to explore?")
-            else:
-                # Continue existing conversation
-                if self.current_suggestions:
-                    suggestions_text = "You can choose from the available options, or ask something new."
-                    self.speak_text(suggestions_text)
-                else:
-                    self.speak_text("What would you like to explore next?")
-
-        def handle_voice_input(self, text):
-            """Enhanced voice input handling with conversation awareness"""
-            self.log_message(f"🎤 Heard: {text}", "system")
-
-            # Check for conversation control commands
-            text_lower = text.lower().strip()
-
-            if text_lower in ['stop', 'stop listening', 'quit', 'exit']:
-                self.log_message("Voice input stopped by command", "system")
-                self.stop_voice_input()
-                return
-
-            if text_lower in ['new topic', 'reset conversation', 'start over']:
-                self.reset_conversation()
-                self.stop_voice_input()
-                return
-
-            # Check for option selection
-            option_match = re.match(r'option\s+(\d+)', text_lower)
-            if option_match and self.current_suggestions:
-                option_num = int(option_match.group(1))
-                if 1 <= option_num <= len(self.current_suggestions):
-                    self.send_follow_up(self.current_suggestions[option_num - 1], option_num)
-                    self.stop_voice_input()
-                    return
-
-            # Put the recognized text in the input field
-            self.input_entry.delete(0, tk.END)
-            self.input_entry.insert(0, text)
-
-            # For conversational flow, auto-send recognized speech
-            if self.conversation_active:
-                self.send_message()
-            else:
-                # Ask for confirmation for new conversations
-                auto_send = messagebox.askyesno("Voice Input", f"Recognized: '{text}'\n\nSend this message?")
-                if auto_send:
-                    self.send_message()
-
-            # Stop voice input after processing
-            self.stop_voice_input()
-
-        def show_conversation_help(self):
-            """Show help dialog for conversational features"""
-            help_window = tk.Toplevel(self.root)
-            help_window.title("Conversational Features Help")
-            help_window.geometry("600x500")
-            help_window.transient(self.root)
-            help_window.grab_set()
-
-            # Create scrollable text widget
-            text_frame = ttk.Frame(help_window)
-            text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-            text_widget = tk.Text(text_frame, wrap=tk.WORD, padx=10, pady=10, font=('Consolas', 10))
-            scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
-            text_widget.configure(yscrollcommand=scrollbar.set)
-
-            text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-            # Help content
-            help_content = """🤖 Conversational Voice SQL Client Help
-
-    CONVERSATIONAL FEATURES:
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    🔄 Follow-up Suggestions:
-    After each query, the AI will suggest relevant follow-up questions.
-    Click the numbered buttons or say "option 1", "option 2", etc.
-
-    💬 Natural Language:
-    You can use pronouns and references:
-    • "Show me Customer A's sales" → "How do they compare to others?"
-    • "Check inventory for PFF5225R" → "What about that part's competitors?"
-
-    🎤 Voice Commands:
-    • "Option 1" / "Option 2" - Select follow-up suggestions
-    • "New topic" - Reset conversation and start fresh
-    • "Stop" - End voice input
-
-    📊 Smart Context:
-    The AI remembers:
-    • Previous customers, parts, and dates mentioned
-    • Query types (sales, inventory, competitor analysis)
-    • Results from recent queries
-
-    EXAMPLE CONVERSATION FLOW:
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    You: "How many records are in ebayWT?"
-    AI: "Found 2.1 million records. Would you like to:
-         - See sample records to understand the data
-         - Check the most recent activity
-         - Compare to other tables?"
-
-    You: "Option 1" (or click the button)
-    AI: Shows sample data and offers more specific follow-ups
-
-    You: "What about CustomerA's purchases?"
-    AI: (Understands context) Shows CustomerA data with relevant suggestions
-
-    QUICK TIPS:
-    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    ✅ Let the AI guide you through data exploration
-    ✅ Use the suggestion buttons for faster navigation  
-    ✅ Mix voice and text input as preferred
-    ✅ Say "new topic" to change subjects
-    ✅ Export data when you find interesting insights
-
-    The AI learns your interests and suggests increasingly relevant follow-ups!
-    """
-
-            text_widget.insert(tk.END, help_content)
-            text_widget.config(state=tk.DISABLED)
-
-            # Close button
-            button_frame = ttk.Frame(help_window)
-            button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-
-            ttk.Button(button_frame, text="Close", command=help_window.destroy).pack(side=tk.RIGHT)
-
     def query_server_conversational(self, question, export_format=None):
         """Enhanced query with conversational session management"""
         try:
@@ -1539,7 +1313,7 @@ class VoiceClientGUI:
         finally:
             self.root.after(0, lambda: self.status_label.config(text="Ready"))
 
-    def handle_conversational_response(self, response: str, suggestions: List[str] = None):
+    def handle_conversational_response(self, response: str, suggestions=None):
         """Handle response with conversational features"""
         # Log the main response
         self.log_message(response, "assistant")
@@ -1556,7 +1330,7 @@ class VoiceClientGUI:
             if self.auto_speak_responses.get() and self.tts_engine and not self.is_speaking:
                 # Extract main answer without suggestions for speech
                 main_answer = self.extract_main_answer(response)
-                self.speak_text(main_answer)
+                self.start_speech(main_answer)
 
                 # Mention suggestions after a pause
                 self.root.after(3000, lambda: self.speak_suggestions_available(len(suggestions)))
@@ -1566,7 +1340,7 @@ class VoiceClientGUI:
 
             # Normal speech handling
             if self.auto_speak_responses.get() and self.tts_engine and not self.is_speaking:
-                self.speak_text(response)
+                self.start_speech(response)
 
         # Check for export handling
         if self.is_export_response(response):
@@ -1933,40 +1707,6 @@ class VoiceClientGUI:
 
 
 
-    def reset_conversation(self):
-        """Reset conversation context on both client and server"""
-        # Clear local conversation state
-        self.clear_quick_responses()
-        self.conversation_active = False
-
-        # Reset server session
-        def reset_server_session():
-            try:
-                payload = {}
-                if self.session_id:
-                    payload["session_id"] = self.session_id
-
-                response = self.session.post(
-                    f"{self.server_url}/reset_conversation",
-                    json=payload,
-                    timeout=5
-                )
-
-                if response.status_code == 200:
-                    data = response.json()
-                    self.session_id = data.get("session_id")
-                    self.root.after(0, lambda: self.log_message("🔄 Started new conversation topic", "system"))
-                else:
-                    self.root.after(0, lambda: self.log_message("🔄 Reset locally (server reset failed)", "system"))
-
-            except Exception as e:
-                self.root.after(0, lambda: self.log_message(f"🔄 Reset locally (server error: {e})", "system"))
-
-        threading.Thread(target=reset_server_session, daemon=True).start()
-
-        # Update UI state
-        self.voice_status.config(text="Ready for new topic")
-
     def show_conversation_help(self):
         """Show help dialog for conversational features"""
         help_window = tk.Toplevel(self.root)
@@ -2047,238 +1787,6 @@ The AI learns your interests and suggests increasingly relevant follow-ups!
         button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
 
         ttk.Button(button_frame, text="Close", command=help_window.destroy).pack(side=tk.RIGHT)
-
-    def clear_quick_responses(self):
-        """Enhanced clearing of quick response elements"""
-        for btn in self.quick_buttons:
-            btn.destroy()
-        self.quick_buttons.clear()
-        self.current_suggestions.clear()
-        self.quick_response_frame.grid_remove()
-
-        # Update status
-        self.update_conversation_status()
-
-    def update_conversation_status(self):
-        """Update conversation status indicators"""
-        if self.conversation_active:
-            if self.current_suggestions:
-                status_text = f"💬 Conversation active ({len(self.current_suggestions)} suggestions)"
-            else:
-                status_text = "💬 Conversation active"
-            if hasattr(self, 'conversation_status'):
-                self.conversation_status.config(text=status_text)
-        else:
-            if hasattr(self, 'conversation_status'):
-                self.conversation_status.config(text="")
-
-        # Show session ID if available
-        if hasattr(self, 'session_label') and hasattr(self, 'session_id') and self.session_id:
-            session_text = f"Session: {self.session_id[:8]}..."
-            self.session_label.config(text=session_text)
-        elif hasattr(self, 'session_label'):
-            self.session_label.config(text="")
-
-    def create_quick_response_buttons(self, options):
-        """Enhanced quick response button creation"""
-        # Clear existing buttons
-        for btn in self.quick_buttons:
-            btn.destroy()
-        self.quick_buttons.clear()
-
-        if not options:
-            self.quick_response_frame.grid_remove()
-            return
-
-        # Show the frame
-        self.quick_response_frame.grid()
-
-        # Create container with better layout
-        button_container = ttk.Frame(self.quick_response_frame)
-        button_container.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
-
-        # Create buttons with enhanced styling
-        for i, option in enumerate(options):
-            # Create more readable button text
-            button_text = self.format_button_text(option, i + 1)
-
-            btn = ttk.Button(
-                button_container,
-                text=button_text,
-                command=lambda opt=option, num=i + 1: self.send_follow_up(opt, num),
-                width=30  # Consistent width
-            )
-
-            # Arrange in 2 columns
-            row = i // 2
-            col = i % 2
-            btn.grid(row=row, column=col, padx=3, pady=2, sticky=(tk.W, tk.E))
-            self.quick_buttons.append(btn)
-
-        # Configure column weights for better layout
-        button_container.columnconfigure(0, weight=1)
-        button_container.columnconfigure(1, weight=1)
-
-        # Store current suggestions
-        self.current_suggestions = options
-
-        # Update status
-        self.update_conversation_status()
-
-        # Add keyboard shortcuts hint
-        hint_label = ttk.Label(
-            self.quick_response_frame,
-            text="💡 Tip: Say 'option 1', 'option 2', etc. or use the buttons",
-            font=('Arial', 8),
-            foreground="gray"
-        )
-        hint_label.grid(row=1, column=0, pady=(5, 0))
-
-    def format_button_text(self, option: str, number: int) -> str:
-        """Format option text for button display"""
-        # Remove any existing numbering
-        clean_option = re.sub(r'^\d+[\.\)]\s*', '', option.strip())
-
-        # Truncate long options intelligently
-        if len(clean_option) > 45:
-            # Try to break at word boundaries
-            words = clean_option.split()
-            truncated = ""
-            for word in words:
-                if len(truncated + word) < 42:
-                    truncated += word + " "
-                else:
-                    break
-            clean_option = truncated.strip() + "..."
-
-        return f"{number}. {clean_option}"
-
-    def send_follow_up(self, option_text: str, option_number: int):
-        """Enhanced follow-up sending with better feedback"""
-        # Log the selection with context
-        self.log_message(f"💡 Selected Option {option_number}: {option_text}", "user")
-
-        # For voice users, provide audio feedback
-        if self.auto_speak_responses.get() and self.tts_engine:
-            feedback = f"Option {option_number} selected."
-            threading.Thread(target=lambda: self.tts_engine.say(feedback) or self.tts_engine.runAndWait(),
-                            daemon=True).start()
-
-        # Clear input and set the follow-up text (server will understand this)
-        self.input_entry.delete(0, tk.END)
-        self.input_entry.insert(0, f"Option {option_number}")
-
-        # Send the message
-        self.send_message()
-
-        # Clear quick response buttons
-        self.clear_quick_responses()
-
-        # Update status
-        self.update_conversation_status()
-
-    def query_server_conversational(self, question, export_format=None):
-        """Enhanced query with conversational session management"""
-        try:
-            self.root.after(0, lambda: self.status_label.config(text="Processing query..."))
-
-            # Prepare payload with session ID
-            payload = {
-                "question": question,
-                "session_id": getattr(self, 'session_id', None)
-            }
-
-            if export_format:
-                payload["export_format"] = export_format
-
-            response = self.session.post(
-                f"{self.server_url}/ask",
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                answer = data.get("answer", "No answer received")
-
-                # Update session ID if provided
-                if "session_id" in data:
-                    self.session_id = data["session_id"]
-
-                # Get follow-up suggestions if available
-                suggestions = data.get("suggestions", [])
-
-                # Handle the response with suggestions
-                self.root.after(0, lambda: self.handle_conversational_response(answer, suggestions))
-
-            else:
-                error_msg = f"Server error: {response.status_code} - {response.text}"
-                self.root.after(0, lambda: self.log_message(error_msg, "error"))
-
-        except requests.exceptions.ConnectionError:
-            self.root.after(0, lambda: self.log_message("Cannot connect to server. Is it running?", "error"))
-        except Exception as e:
-            self.root.after(0, lambda: self.log_message(f"Error: {e}", "error"))
-        finally:
-            self.root.after(0, lambda: self.status_label.config(text="Ready"))
-
-    def handle_conversational_response(self, response: str, suggestions=None):
-        """Handle response with conversational features"""
-        # Log the main response
-        self.log_message(response, "assistant")
-
-        # Store for repeat speaking
-        self.last_response = response
-
-        # Handle follow-up suggestions
-        if suggestions:
-            self.create_quick_response_buttons(suggestions)
-            self.conversation_active = True
-
-            # For voice mode, speak response and mention suggestions
-            if self.auto_speak_responses.get() and self.tts_engine and not self.is_speaking:
-                # Extract main answer without suggestions for speech
-                main_answer = self.extract_main_answer(response)
-                self.speak_text(main_answer)
-
-                # Mention suggestions after a pause
-                self.root.after(3000, lambda: self.speak_suggestions_available(len(suggestions)))
-        else:
-            # No suggestions, clear any existing ones
-            self.clear_quick_responses()
-
-            # Normal speech handling
-            if self.auto_speak_responses.get() and self.tts_engine and not self.is_speaking:
-                self.speak_text(response)
-
-        # Check for export handling
-        if self.is_export_response(response):
-            self.handle_export_download(response)
-
-    def extract_main_answer(self, response: str) -> str:
-        """Extract the main answer, removing follow-up suggestions for cleaner speech"""
-        lines = response.split('\n')
-        main_lines = []
-
-        for line in lines:
-            line = line.strip()
-            # Stop at follow-up indicators
-            if any(indicator in line.lower() for indicator in [
-                'would you like to:', 'you might want to:', 'building on this',
-                'option 1:', 'option 2:', 'just say', 'based on this data'
-            ]):
-                break
-            if line:
-                main_lines.append(line)
-
-        return '\n'.join(main_lines)
-
-    def speak_suggestions_available(self, count: int):
-        """Announce that follow-up suggestions are available"""
-        if not self.is_speaking:  # Only if not already speaking
-            suggestion_text = f"I've prepared {count} follow-up suggestions. "
-            suggestion_text += "You can click the numbered buttons or say 'option 1', 'option 2', and so on."
-            self.speak_text(suggestion_text)
 
 
 def main():
