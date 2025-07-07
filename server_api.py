@@ -4,6 +4,7 @@ import sys
 import logging
 import uvicorn
 import re
+import socket  # Add this import at the top where it belongs
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -420,8 +421,6 @@ def main():
         sys.exit(1)
     finally:
         logger.info("Server process ending")
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.close()
 
 if __name__ == "__main__":
     main()

@@ -22,6 +22,7 @@ speech_error = None
 
 try:
     import pyttsx3
+
     TTS_AVAILABLE = True
 except ImportError as e:
     speech_error = f"pyttsx3 not available: {e}"
@@ -29,6 +30,7 @@ except ImportError as e:
 try:
     import speech_recognition as sr
     import pyaudio
+
     STT_AVAILABLE = True
 except ImportError as e:
     if speech_error:
@@ -40,7 +42,7 @@ SPEECH_AVAILABLE = TTS_AVAILABLE and STT_AVAILABLE
 
 
 class VoiceClientGUI:
-    def __init__(self, root):
+    def __init__(self, root, auto_test_connection=True):
         self.root = root
         self.root.title("Voice SQL Client")
         self.root.geometry("800x600")
@@ -76,7 +78,10 @@ class VoiceClientGUI:
 
         self.setup_speech()
         self.create_widgets()
-        self.test_connection()
+
+        # Only test connection if not in testing mode
+        if auto_test_connection:
+            self.test_connection()
 
     def setup_speech(self):
         """Initialize speech components"""
@@ -600,6 +605,7 @@ class VoiceClientGUI:
 
     def test_connection(self):
         """Test server connection"""
+
         def test():
             try:
                 response = self.session.get(f"{self.server_url}/health", timeout=5)
@@ -971,6 +977,7 @@ class VoiceClientGUI:
 
     def show_downloads(self):
         """Show available downloads window"""
+
         def get_downloads():
             try:
                 response = self.session.get(f"{self.server_url}/exports")
@@ -1086,6 +1093,7 @@ class VoiceClientGUI:
 
     def show_table_sizes(self):
         """Show table sizes to help users understand data volumes"""
+
         def get_sizes():
             tables = ["ebayWT", "ebayWT_NF", "ebayNF_SupplierMatch"]
             sizes = {}
@@ -1163,7 +1171,7 @@ def main():
     """Main entry point"""
     root = tk.Tk()
 
-    app = VoiceClientGUI(root)
+    app = VoiceClientGUI(root, auto_test_connection=True)  # Enable connection testing in normal mode
 
     # Welcome message
     app.log_message("Voice SQL Client started", "system")
