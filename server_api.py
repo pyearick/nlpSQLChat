@@ -579,7 +579,7 @@ def main():
         logger.info(f"Process ID: {os.getpid()}")
         # Write PID to file for process management
         with open("C:/Logs/server.pid", "w") as f:
-                f.write(str(os.getpid()))
+            f.write(str(os.getpid()))
 
         uvicorn.run(
             "server_api:app",
