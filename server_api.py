@@ -577,6 +577,10 @@ def main():
         config = load_environment_config()
         logger.info(f"Starting production server on {config['server_host']}:{config['server_port']}")
         logger.info(f"Process ID: {os.getpid()}")
+        # Write PID to file for process management
+        with open("C:/Logs/server.pid", "w") as f:
+                f.write(str(os.getpid()))
+
         uvicorn.run(
             "server_api:app",
             host=config['server_host'],
