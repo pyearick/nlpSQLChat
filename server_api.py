@@ -21,27 +21,56 @@ import uuid
 
 
 # Configure logging
+# Configure logging - FIXED VERSION
 def setup_production_logging():
     log_dir = Path("C:/Logs")
     log_dir.mkdir(exist_ok=True)
-    log_file = log_dir / "voice_sql_api.log"
-    logging.getLogger().handlers.clear()  # Prevent duplicate handlers
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(logging.Formatter(
-        "[%(asctime)s - %(name)s:%(lineno)d - %(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    ))
-    console_handler.stream = open(sys.stdout.fileno(), mode='w', encoding='utf-8', errors='replace')
+
+    # Single unified log file for everything
+    log_file = log_dir / "VoiceSQLAPIServer.log"
+
+    # Clear existing handlers to prevent duplicates
+    logging.getLogger().handlers.clear()
+
+    # Create file handler only - no console handler when running from Task Scheduler
     file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
     file_handler.setFormatter(logging.Formatter(
         "[%(asctime)s - %(name)s:%(lineno)d - %(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     ))
-    logging.basicConfig(level=logging.INFO, handlers=[console_handler, file_handler])
+
+    # Only add console handler if we have a valid stdout (i.e., running from PyCharm/terminal)
+    handlers = [file_handler]
+    try:
+        # Test if stdout is available
+        sys.stdout.write("")
+        sys.stdout.flush()
+
+        # If we get here, stdout is available - add console handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(logging.Formatter(
+            "[%(asctime)s - %(name)s:%(lineno)d - %(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+        handlers.append(console_handler)
+
+    except (OSError, AttributeError):
+        # stdout is not available (running from Task Scheduler) - skip console handler
+        pass
+
+    # Configure basic logging
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=handlers,
+        force=True  # Force reconfiguration
+    )
+
+    # Suppress noisy loggers
     logging.getLogger("azure").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("uvicorn").setLevel(logging.WARNING)  # Suppress Uvicorn logs
+    logging.getLogger("uvicorn").setLevel(logging.WARNING)
+
     return logging.getLogger(__name__)
 
 

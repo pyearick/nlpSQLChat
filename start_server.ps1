@@ -1,27 +1,26 @@
-﻿# start_server.ps1 - PowerShell startup script with proper process management
+﻿# start_server.ps1 - Simplified version that avoids stdout redirect conflicts
 Set-Location -Path "C:\Users\pyearick.CRP\OneDrive - CRP Industries Inc\CRPAF\PycharmProjects\nlp-sql-in-a-box"
 
+# Single unified log file
+$logFile = "C:\Logs\VoiceSQLAPIServer.log"
+
 # Ensure log directory exists
-$logDir = "C:/Logs"
-if (-not (Test-Path $logDir)) {
-    New-Item -ItemType Directory -Path $logDir | Out-Null
+if (-not (Test-Path "C:\Logs")) {
+    New-Item -ItemType Directory -Path "C:\Logs" | Out-Null
 }
 
-# Single unified log file
-$logFile = "$logDir\VoiceSQLAPIServer.log"
-
 # Log startup
-$logMsg = "[$(Get-Date)] ========== Starting Voice SQL API Server =========="
+$logMsg = "[$(Get-Date)] ========== PowerShell Starting Voice SQL API Server =========="
 Add-Content -Path $logFile -Value $logMsg
 $logMsg = "[$(Get-Date)] Working Directory: $PWD"
 Add-Content -Path $logFile -Value $logMsg
 
-# Clean up port 8000 and any existing server processes
+# Clean up existing processes
 try {
     $logMsg = "[$(Get-Date)] Cleaning up existing processes..."
     Add-Content -Path $logFile -Value $logMsg
 
-    # Kill any existing server_api.py processes
+    # Kill any existing server processes
     Get-Process -Name "python" -ErrorAction SilentlyContinue | Where-Object {
         $_.CommandLine -like "*server_api.py*"
     } | ForEach-Object {
@@ -30,7 +29,7 @@ try {
         Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
     }
 
-    # Also check by port
+    # Also kill by port
     $netstatOutput = netstat -aon | Select-String ":8000.*LISTENING"
     if ($netstatOutput) {
         foreach ($line in $netstatOutput) {
@@ -41,9 +40,8 @@ try {
         }
     }
 
-    # Wait for port to be released
     Start-Sleep -Seconds 3
-    $logMsg = "[$(Get-Date)] Cleanup completed, waiting 3 seconds for port release"
+    $logMsg = "[$(Get-Date)] Cleanup completed"
     Add-Content -Path $logFile -Value $logMsg
 
 } catch {
@@ -51,36 +49,28 @@ try {
     Add-Content -Path $logFile -Value $logMsg
 }
 
-# Store PID for cleanup later
-$pidFile = "$logDir\voicesql_server.pid"
-
 # Start the server
 try {
-    $logMsg = "[$(Get-Date)] Starting Python server..."
-    Add-Content -Path "$logDir\startup.log" -Value $logMsg
-
     $pythonPath = "C:\Users\pyearick.CRP\OneDrive - CRP Industries Inc\CRPAF\PycharmProjects\nlp-sql-in-a-box\.venv\Scripts\python.exe"
     $serverScript = "server_api.py"
-    $logFile = "$logDir\voice_sql_api_task.log"
 
-    # Start the server process with tight parent-child relationship
-    # Using -NoNewWindow -PassThru creates stronger process tree coupling
-    $process = Start-Process -FilePath $pythonPath -ArgumentList $serverScript -WorkingDirectory $PWD -NoNewWindow -PassThru -RedirectStandardOutput "$logDir\server_output.log" -RedirectStandardError "$logDir\server_error.log"
-
-    # Store the PID for later cleanup
-    $process.Id | Set-Content -Path $pidFile
-
-    # Wait longer for server initialization (Azure credentials can be slow)
-    $logMsg = "[$(Get-Date)] Waiting for server initialization..."
+    $logMsg = "[$(Get-Date)] Starting Python server (no stdout redirect to avoid handle conflicts)..."
     Add-Content -Path $logFile -Value $logMsg
 
-    # Progressive health checking with retries
+    # Start server WITHOUT redirecting stdout/stderr to avoid WinError 6
+    # The Python script will handle its own logging to the same unified log file
+    $process = Start-Process -FilePath $pythonPath -ArgumentList $serverScript -WorkingDirectory $PWD -WindowStyle Hidden -PassThru
+
+    $logMsg = "[$(Get-Date)] Server started with PID: $($process.Id)"
+    Add-Content -Path $logFile -Value $logMsg
+
+    # Health check with retries
     $maxAttempts = 6
     $attempt = 1
     $serverReady = $false
 
     while ($attempt -le $maxAttempts -and !$serverReady) {
-        Start-Sleep -Seconds 10  # Wait 10 seconds between attempts
+        Start-Sleep -Seconds 10
 
         $logMsg = "[$(Get-Date)] Health check attempt $attempt of $maxAttempts..."
         Add-Content -Path $logFile -Value $logMsg
@@ -88,100 +78,47 @@ try {
         try {
             $response = Invoke-WebRequest -Uri "http://localhost:8000/health" -TimeoutSec 5 -UseBasicParsing
             if ($response.StatusCode -eq 200) {
-                $logMsg = "[$(Get-Date)] ✅ Server health check PASSED - server is responding (attempt $attempt)"
+                $logMsg = "[$(Get-Date)] ✅ Server health check PASSED - server is responding!"
                 Add-Content -Path $logFile -Value $logMsg
                 $serverReady = $true
             }
         } catch {
-            $logMsg = "[$(Get-Date)] ❌ Health check attempt $attempt failed: $_"
-            Add-Content -Path $logFile -Value $logMsg
-
-            # Check if process is still alive
             if ($process.HasExited) {
-                $logMsg = "[$(Get-Date)] 💥 ERROR: Server process has exited during startup! Exit code: $($process.ExitCode)"
+                $logMsg = "[$(Get-Date)] 💥 ERROR: Server process exited! Exit code: $($process.ExitCode)"
                 Add-Content -Path $logFile -Value $logMsg
                 break
             } else {
-                $logMsg = "[$(Get-Date)] 🔄 Server process still running (PID: $($process.Id)), will retry..."
+                $logMsg = "[$(Get-Date)] 🔄 Health check failed, server still starting... ($_)"
                 Add-Content -Path $logFile -Value $logMsg
             }
         }
         $attempt++
     }
 
-    if (!$serverReady) {
-        $logMsg = "[$(Get-Date)] ⚠️ WARNING: Server did not respond to health checks within 60 seconds"
+    if ($serverReady) {
+        $logMsg = "[$(Get-Date)] 🎉 Server startup completed successfully!"
         Add-Content -Path $logFile -Value $logMsg
-
-        # Check port status
-        $portCheck = netstat -aon | Select-String ":8000.*LISTENING"
-        if ($portCheck) {
-            $logMsg = "[$(Get-Date)] 🔍 Port 8000 is bound, server may still be starting up..."
-            Add-Content -Path $logFile -Value $logMsg
-        } else {
-            $logMsg = "[$(Get-Date)] 🚫 Port 8000 is not bound - server startup failed"
-            Add-Content -Path $logFile -Value $logMsg
-        }
+    } else {
+        $logMsg = "[$(Get-Date)] ⚠️ Server did not respond within 60 seconds"
+        Add-Content -Path $logFile -Value $logMsg
     }
 
-    # Set up cleanup handler for when PowerShell exits (removes complexity)
-    Register-EngineEvent PowerShell.Exiting -Action {
-        $pidFile = "C:\Logs\voicesql_server.pid"
-        $logFile = "C:\Logs\VoiceSQLAPIServer.log"
-        if (Test-Path $pidFile) {
-            try {
-                $serverPid = Get-Content $pidFile
-                $logMsg = "[$(Get-Date)] 🛑 PowerShell exiting - cleaning up server PID: $serverPid"
-                Add-Content -Path $logFile -Value $logMsg
-                Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
-                Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
-            } catch {
-                # Ignore cleanup errors
-            }
-        }
-    } | Out-Null
-
-    # Keep PowerShell alive to maintain process tree control
-    # This ensures Task Scheduler can kill the entire tree
-    $logMsg = "[$(Get-Date)] 👁️ Monitoring server process (PID: $($process.Id))..."
+    # Monitor the server process
+    $logMsg = "[$(Get-Date)] 👁️ Monitoring server process..."
     Add-Content -Path $logFile -Value $logMsg
 
-    # Simple monitoring loop - keeps script alive for proper Task Scheduler control
-    try {
-        while (!$process.HasExited) {
-            Start-Sleep -Seconds 30
-
-            # Quick health check (optional) - only occasionally to reduce log noise
-            if ((Get-Random -Maximum 10) -eq 0) {  # Only check occasionally
-                try {
-                    $null = Invoke-WebRequest -Uri "http://localhost:8000/health" -TimeoutSec 3 -UseBasicParsing
-                } catch {
-                    $logMsg = "[$(Get-Date)] 🚨 Health check failed - server may need attention"
-                    Add-Content -Path $logFile -Value $logMsg
-                }
-            }
-        }
-    } catch {
-        # Handle any interruption (like Task Scheduler stop)
-        $logMsg = "[$(Get-Date)] 🛑 Monitoring interrupted - cleaning up..."
-        Add-Content -Path $logFile -Value $logMsg
-    } finally {
-        # Ensure cleanup when script exits
-        if ($process -and !$process.HasExited) {
-            $logMsg = "[$(Get-Date)] 💀 Force-killing server process..."
-            Add-Content -Path $logFile -Value $logMsg
-            $process.Kill()
-        }
-        $logMsg = "[$(Get-Date)] ========== PowerShell script exiting =========="
-        Add-Content -Path $logFile -Value $logMsg
+    # Keep PowerShell alive to maintain process control
+    while (!$process.HasExited) {
+        Start-Sleep -Seconds 30
     }
+
+    $logMsg = "[$(Get-Date)] 🛑 Server process has exited"
+    Add-Content -Path $logFile -Value $logMsg
 
 } catch {
     $logMsg = "[$(Get-Date)] 💥 Failed to start server: $_"
     Add-Content -Path $logFile -Value $logMsg
 } finally {
-    # Cleanup PID file
-    if (Test-Path $pidFile) {
-        Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
-    }
+    $logMsg = "[$(Get-Date)] ========== PowerShell script exiting =========="
+    Add-Content -Path $logFile -Value $logMsg
 }
