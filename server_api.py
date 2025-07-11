@@ -15,13 +15,12 @@ from azure.identity import DefaultAzureCredential
 from semantic_kernel.contents.chat_history import ChatHistory
 from src.kernel.service import Kernel
 from src.database.secure_service import create_database_service, get_database_credentials, SecureDatabase
-from src.conversation.context_manager import ConversationMemory  # ADD THIS
+from src.conversation.context_manager import ConversationMemory
 from typing import Dict, Any, Optional, List
 import uuid
 
 
 # Configure logging
-# Configure logging - FIXED VERSION
 def setup_production_logging():
     log_dir = Path("C:/Logs")
     log_dir.mkdir(exist_ok=True)
@@ -76,8 +75,8 @@ def setup_production_logging():
 
 logger = setup_production_logging()
 
-# ADD THIS: Store conversation sessions
-conversation_sessions = {}  # Store session_id -> ConversationMemory
+# Store conversation sessions
+conversation_sessions = {}  # session_id -> ConversationMemory
 
 app = FastAPI(
     title="Voice SQL API",
@@ -92,18 +91,18 @@ shutdown_requested = False
 
 class QueryRequest(BaseModel):
     question: str
-    session_id: Optional[str] = None  # ADD THIS
+    session_id: Optional[str] = None
     export_format: Optional[str] = None  # 'csv', 'txt', or None for display
 
 
 class QueryResponse(BaseModel):
     answer: str
     status: str = "success"
-    session_id: Optional[str] = None  # ADD THIS
-    suggestions: Optional[List[str]] = None  # ADD THIS
+    session_id: Optional[str] = None
+    suggestions: Optional[List[str]] = None
 
 
-class ConversationResetRequest(BaseModel):  # ADD THIS
+class ConversationResetRequest(BaseModel):
     session_id: Optional[str] = None
 
 
@@ -140,7 +139,7 @@ class SimpleKernel:
             if select_match:
                 columns = select_match.group(1).replace(" ", "").split(",")
                 table_name = select_match.group(2)
-                sql_query = f"SELECT {', '.join(columns)} FROM {table_name} WHERE ROWNUM <= 3"
+                sql_query = f"SELECT TOP 3 {', '.join(columns)} FROM {table_name}"  # Fixed for SQL Server (TOP instead of ROWNUM)
                 result = self.database_service.query(sql_query)
                 if isinstance(result, str):
                     return result
@@ -172,6 +171,8 @@ def load_environment_config():
         logger.warning("No .env file found in expected locations")
         logger.info(f"Searched: {[str(p.absolute()) for p in env_paths]}")
 
+    from azure.identity import ClientSecretCredential
+
     config = {
         'server_name': os.getenv("SQL_SERVER_NAME", "BI-SQL001"),
         'database_name': os.getenv("SQL_DATABASE_NAME", "CRPAF"),
@@ -183,14 +184,26 @@ def load_environment_config():
         'server_port': int(os.getenv("SERVER_PORT", "8000")),
         'debug': os.getenv("DEBUG", "false").lower() == "true"
     }
-    logger.info("Production environment configuration:")
-    logger.info(f"  Working Directory: {os.getcwd()}")
-    logger.info(f"  SQL Server: {config['server_name']}")
-    logger.info(f"  Database: {config['database_name']}")
-    logger.info(f"  DB Username from env: {'Yes' if config['db_username'] else 'No'}")
-    logger.info(f"  DB Password from env: {'Yes' if config['db_password'] else 'No'}")
-    logger.info(f"  Azure OpenAI: {'Yes' if config['openai_endpoint'] else 'No'}")
-    logger.info(f"  Server: {config['server_host']}:{config['server_port']}")
+
+    # Add Azure credential creation with error handling
+    try:
+        tenant_id = os.getenv("AZURE_TENANT_ID")
+        client_id = os.getenv("AZURE_CLIENT_ID")
+        client_secret = os.getenv("AZURE_CLIENT_SECRET")
+
+        if not all([tenant_id, client_id, client_secret]):
+            raise ValueError("Missing Azure auth env vars (AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET)")
+
+        config['azure_credential'] = ClientSecretCredential(
+            tenant_id,
+            client_id,
+            client_secret
+        )
+        logger.info("Azure credential initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to create Azure credential: {e}")
+        config['azure_credential'] = None  # Fallback to simple mode
+
     return config
 
 
@@ -232,19 +245,21 @@ def initialize_database_service(config):
 
 def initialize_azure_services(config):
     try:
-        credential = None
-        if config['openai_endpoint'] and config['openai_deployment_name']:
-            credential = DefaultAzureCredential()
+        credential = config.get('azure_credential')  # Use from config if available
+        if not credential:
+            credential = DefaultAzureCredential()  # Fallback if needed
+        if credential and config['openai_endpoint'] and config['openai_deployment_name']:
             logger.info("Azure credentials initialized")
+            return credential
         else:
             logger.info("Azure OpenAI not configured")
-        return credential
+            return None
     except Exception as e:
         logger.warning(f"Azure credential initialization failed: {e}")
         return None
 
 
-# ADD THIS: Helper function to get or create conversation session
+# Helper function to get or create conversation session
 def get_conversation_session(session_id: Optional[str]) -> tuple[str, ConversationMemory]:
     """Get existing conversation session or create new one"""
     if session_id and session_id in conversation_sessions:
@@ -257,7 +272,7 @@ def get_conversation_session(session_id: Optional[str]) -> tuple[str, Conversati
         return new_session_id, conversation_sessions[new_session_id]
 
 
-# ADD THIS: Helper function to generate follow-up suggestions
+# Helper function to generate follow-up suggestions
 def generate_follow_up_suggestions(conversation_memory: ConversationMemory, response: str) -> List[str]:
     """Generate context-aware follow-up suggestions"""
     try:
@@ -304,7 +319,7 @@ async def lifespan(app: FastAPI):
         logger.info(f"  Security: {'Authenticated user' if config['db_username'] else 'Trusted connection'}")
         logger.info(f"  AI: {'Enabled with auto token refresh' if hasattr(kernel, 'chat_completion') else 'Disabled'}")
         logger.info(f"  Speech: Handled by client (Windows TTS)")
-        logger.info(f"  Conversational Features: Enabled")  # ADD THIS
+        logger.info(f"  Conversational Features: Enabled")
     except Exception as e:
         logger.error(f"Critical startup failure: {e}", exc_info=True)
         try:
@@ -331,7 +346,7 @@ async def root():
         "message": "Voice SQL API is running",
         "status": "healthy",
         "mode": "production",
-        "features": ["conversational_ai", "session_management", "follow_up_suggestions"]  # ADD THIS
+        "features": ["conversational_ai", "session_management", "follow_up_suggestions"]
     }
 
 
@@ -356,7 +371,7 @@ async def health_check():
                 "ai_enabled": hasattr(kernel, 'chat_completion') if kernel else False,
                 "kernel_type": "ai" if hasattr(kernel, 'chat_completion') else "simple",
                 "token_refresh": "automatic" if hasattr(kernel, '_refresh_token_and_reinitialize') else "manual",
-                "conversation_sessions": len(conversation_sessions)  # ADD THIS
+                "conversation_sessions": len(conversation_sessions)
             }
         }
         if not db_status:
@@ -417,7 +432,6 @@ async def ask_question(request: QueryRequest) -> QueryResponse:
         raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
 
 
-# ADD THIS: New endpoint for resetting conversations
 @app.post("/reset_conversation")
 async def reset_conversation(request: ConversationResetRequest):
     """Reset conversation context and start fresh"""
@@ -446,7 +460,6 @@ async def reset_conversation(request: ConversationResetRequest):
         raise HTTPException(status_code=500, detail=f"Error resetting conversation: {str(e)}")
 
 
-# ADD THIS: Debug endpoint for conversation state
 @app.get("/conversation_state/{session_id}")
 async def get_conversation_state(session_id: str):
     """Get conversation state for debugging"""
@@ -493,7 +506,7 @@ async def get_detailed_status():
                 "credentials_in_env": bool(config['db_username'] and config['db_password'])
             },
             "chat_history_length": len(chat_history) if chat_history else 0,
-            "conversation_sessions": len(conversation_sessions)  # ADD THIS
+            "conversation_sessions": len(conversation_sessions)
         }
     except Exception as e:
         logger.error(f"Status check failed: {e}")
