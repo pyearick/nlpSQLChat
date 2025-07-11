@@ -1,4 +1,4 @@
-# tkinter_voice_client.py - Enhanced Voice SQL Client
+# main_window.py - Enhanced Voice SQL Client
 
 import os
 import sys
@@ -975,17 +975,17 @@ class VoiceClientGUI:
             self.speak_text(speak_text)
 
     def toggle_voice_input(self):
-        """Toggle voice input on/off"""
-        if not self.recognizer or not self.microphone:
-            self.log_message("❌ Voice input not available - microphone or speech recognition not initialized", "error")
-            return
-
-        if self.is_listening:
-            # Stop listening
-            self.stop_voice_input()
+        if not self.voice_input_enabled.get():
+            # Switch to Voice Mode and start listening
+            self.set_voice_mode()
+            self.start_listening()  # Or handle_voice_input()
+            self.voice_input_btn.config(text="🔴 Stop Listening")  # Dynamic label
         else:
-            # Start listening
-            self.start_voice_input()
+            # Stop listening and switch to Text Mode
+            self.stop_all_speech()
+            self.set_text_mode()
+            self.voice_input_btn.config(text="🎤 Start Voice Input")
+        self.update_status()  # Refresh UI status
 
     def start_voice_input(self):
         """Start voice input"""
