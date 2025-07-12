@@ -399,7 +399,12 @@ class DatabasePlugin:
                     f"\n\n... and {len(result) - self.max_display_rows:,} more rows. "
                     f"Ask me to 'export full results to CSV' if you need all data.")
 
-        print(f">> DB RESULT: {result}")
+        # try:
+        #     print(f">> DB RESULT: {result}")
+        # except UnicodeEncodeError:
+        #     # If there are characters that can't be printed, replace them with '?'
+        #     out = str(result)
+        #     print(f">> DB RESULT: {out}".encode("utf-8", errors="replace").decode("utf-8"))
         return result
 
     # Add a helper function for the AI to use when searches return no results
