@@ -12,6 +12,35 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+STANDARD_TEST_QUERIES = [
+    "Show me Autozone's purchases this quarter",
+    "What did we sell to O'Reilly last month?",
+    "What did we sell to Ozark last month?",
+    "Which customers bought the most AAE-HPS products",
+    "Compare our top 5 customers by revenue",
+    "How many 5760N in stock?",
+    "What products are out of stock?",
+    "Show me low stock items under 5 units",
+    "Show me low stock items under 5 units in coolant hoses",
+    "Which sites have the highest inventory value?",
+    "What's our total inventory for Coolant Hoses?",
+    "What product group is CHR0406R in?",
+    "Show me all products in the HPS-Pumps category",
+    "What are our best-selling filters?",
+    "Which products have the highest profit margins?",
+    "What's the MSRP for PFF5225R?",
+    "Show me competitor pricing for oil filters",
+    "Compare our prices to market prices for BMW parts",
+    "Which parts have the biggest pricing gaps?",
+    "What's selling on eBay for transmission filters?",
+    "Show me parts with high eBay activity but we don't stock",
+    "Which suppliers offer the most parts?",
+    "What parts have multiple sourcing options?",
+    "Which products have low performance scores?",
+    "Show me dead stock items",
+    "What new products were introduced this year?",
+    "Which categories are trending up?"
+]
 # Add the parent directory to sys.path to import the GUI module
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -22,10 +51,10 @@ sys.modules['pyaudio'] = MagicMock()
 
 # Import the GUI class after mocking dependencies
 try:
-    from tkinter_voice_client import VoiceClientGUI
+    from src.gui.main_window import VoiceClientGUI
 except ImportError as e:
     print(f"Could not import VoiceClientGUI: {e}")
-    print("Make sure tkinter_voice_client.py is in the same directory as this test file")
+    print("Make sure main_window.py is in the same directory as this test file")
     sys.exit(1)
 
 
@@ -648,6 +677,14 @@ def run_quick_test():
     finally:
         root.destroy()
 
+def test_all_standard_queries(self):
+    """Test all standard queries for response quality"""
+    for query in STANDARD_TEST_QUERIES:
+        with self.subTest(query=query):
+            # Test that query doesn't return generic "large results" message
+            response = self.send_test_query(query)
+            self.assertNotIn("large number of results", response.lower())
+            self.assertNotIn("1. I can display", response.lower())
 
 if __name__ == '__main__':
     import argparse
