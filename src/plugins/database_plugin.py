@@ -39,6 +39,19 @@ PRODUCT PERFORMANCE & INVENTORY ANALYTICS:
   OverallScore: Comprehensive product performance across all metrics
   Use this table for questions about 'product performance', 'inventory optimization', 'dead stock', 'product scoring'
 
+CURRENT_INVENTORY_DATA:
+- rightInventory: CURRENT INVENTORY LEVELS & COSTS (updated daily at 5 AM from BIWarehouse).
+  Key columns: CaptureDate, Company, Division, Brand, Product, PDescription, Status, Site, StockStatus, Qty, Cost, Value, DSI, ActiveOverstock, ValuewOVS
+  IMPORTANT: Qty is stored as DECIMAL/FLOAT - use Qty <= 5.0 not Qty <= 5 for comparisons
+  FIELD CLARIFICATION: 
+  - Status = full descriptions ('Active', 'Discontinued', 'In Development', 'Not Renewed', 'Not Usable')
+  - StockStatus = classification codes ('A', 'Q', 'R', etc.) - include both fields in results
+  - Qty = decimal quantity on hand, Cost = unit cost, Value = total inventory value (Qty × Cost)
+  - DSI = Days Sales Inventory (higher = slower moving)
+  For active inventory use: WHERE Status = 'Active' (primary filter)
+  Updated daily with fresh data from BIWarehouse InventoryDaily table
+  Use this table for questions about 'current inventory', 'stock levels', 'inventory costs', 'overstock', 'dead stock', 'inventory value'
+
 EBAY MARKET DATA (COMPETITIVE INTELLIGENCE):
 - ebayWT: eBay auction listings (LARGE TABLE - 2M+ records). Market pricing data.
   Key columns: OEAN, UnitPrice (nvarchar - convert to numeric for calculations), Quantity, CaptureDate, SellerID, Title, EndTime
@@ -118,6 +131,38 @@ SOURCING & PROCUREMENT QUERIES:
 - Supplier catalog coverage: SELECT [collection], COUNT([OEAN]) as PartCount FROM Suppliers GROUP BY [collection] ORDER BY PartCount DESC
 - Parts with both suppliers and competition: SELECT s.[OEAN], COUNT(DISTINCT s.[collection]) as SupplierCount, COUNT(DISTINCT i.[Competitor Name]) as CompetitorCount FROM Suppliers s JOIN InternetCompData i ON s.[OEAN] = i.[OEAN] GROUP BY s.[OEAN] ORDER BY CompetitorCount DESC
 
+
+# Add this section to your comprehensive_query_description:
+
+PRODUCT CATEGORY QUERIES (ProdGroupDes-based searches):
+- Category inventory summary: SELECT ProdGroupDes, COUNT(*) as ProductCount, SUM(Qty) as TotalQty, SUM(Value) as TotalValue FROM rightInventory WHERE Status = 'Active' AND UPPER(ProdGroupDes) LIKE UPPER('%COOLANT HOSES%') GROUP BY ProdGroupDes
+- Products in category: SELECT Product, ProdGroupDes, Site, Qty, Value FROM rightInventory WHERE Status = 'Active' AND UPPER(ProdGroupDes) LIKE UPPER('%COOLANT HOSES%') ORDER BY Value DESC
+- Category stock levels: SELECT Product, ProdGroupDes, Qty, FLOOR(Qty) as WholeUnits, CASE WHEN Qty < 1.0 THEN 'OUT' WHEN Qty <= 5.0 THEN 'LOW' ELSE 'OK' END as StockLevel FROM rightInventory WHERE Status = 'Active' AND UPPER(ProdGroupDes) LIKE UPPER('%HPS-PUMPS%')
+- Find product's category: SELECT Product, ProdGroupDes FROM rightInventory WHERE Status = 'Active' AND Product = 'CHR0406R'
+- All available categories: SELECT DISTINCT ProdGroupDes FROM rightInventory WHERE Status = 'Active' AND ProdGroupDes IS NOT NULL ORDER BY ProdGroupDes
+
+CATEGORY SEARCH BEST PRACTICES:
+- ALWAYS use UPPER() for case-insensitive category matching: UPPER(ProdGroupDes) LIKE UPPER('%COOLANT HOSES%')
+- Use LIKE with % wildcards for partial matches: '%COOLANT%' will match 'Coolant Hoses', 'COOLANT HOSES', 'Coolant-Hoses'
+- For category queries, consider if user wants: summary (COUNT, SUM), product list, or stock analysis
+- Common category patterns: exact match first, then partial match if no results
+- Always include Status = 'Active' filter for current inventory
+- Use GROUP BY ProdGroupDes for category summaries, individual products for detailed listings
+
+CATEGORY QUERY TROUBLESHOOTING:
+- If no results for exact category name, try partial matching with LIKE '%keyword%'
+- Check for variations: 'HPS-Pumps' vs 'HPS Pumps' vs 'HPS_PUMPS'
+- Always verify category exists first: SELECT DISTINCT ProdGroupDes FROM rightInventory WHERE UPPER(ProdGroupDes) LIKE UPPER('%COOLANT%')
+- For large result sets, use TOP N or provide summary statistics instead of full product lists
+
+EXAMPLE CATEGORY WORKFLOWS:
+When user asks "inventory values of Coolant Hoses":
+1. SELECT ProdGroupDes, COUNT(*) as Products, SUM(Value) as TotalValue FROM rightInventory WHERE Status = 'Active' AND UPPER(ProdGroupDes) LIKE UPPER('%COOLANT HOSES%') GROUP BY ProdGroupDes
+2. If no results, try: SELECT DISTINCT ProdGroupDes FROM rightInventory WHERE UPPER(ProdGroupDes) LIKE UPPER('%COOLANT%') ORDER BY ProdGroupDes
+
+When user asks "list of products in coolant hoses":
+1. First check category exists, then: SELECT TOP 50 Product, ProdGroupDes, Qty, Value FROM rightInventory WHERE Status = 'Active' AND UPPER(ProdGroupDes) LIKE UPPER('%COOLANT HOSES%') ORDER BY Value DESC
+
 CRITICAL SEARCH PATTERNS:
 - ALWAYS use LIKE with wildcards for customer AND product searches
 - Customer names often have variations (e.g., 'Autozone', 'Autozone USA', 'AutoZone Inc')
@@ -154,6 +199,15 @@ TABLE USAGE GUIDELINES:
 - For comprehensive part intelligence → Query across multiple tables for complete picture
 - For product-to-OEAN mapping → Use rightStock_ProductOEs to connect internal products to market intelligence
 - For multi-OEAN product analysis → Use rightStock_ProductOEs to analyze all OEANs for a single product
+- For current inventory questions → Use rightInventory WHERE Status = 'Active', remember Qty is decimal
+- For low stock alerts -> Use rightInventory WHERE Qty <= 5.0 AND Status = 'Active' 
+- For out of stock -> Use rightInventory WHERE Qty < 1.0 AND Status = 'Active'
+- For inventory optimization -> Join rightInventory with rightScore_results on Product
+- For dead stock identification -> Use rightInventory WHERE DSI > 365 AND Qty >= 1.0 (at least 1 unit)
+- For overstock analysis -> Use rightInventory WHERE ActiveOverstock > 0 OR DSI > 180
+- For inventory valuation -> Use rightInventory Value, Cost columns with SUM aggregations
+- For site inventory comparison -> Use rightInventory GROUP BY Site with SUM(Qty) and SUM(Value)
+- For whole unit calculations -> Use FLOOR(Qty) to get whole units only
 
 CRITICAL OEAN/PRODUCT FIELD MAPPING:
 Each table uses different field names for part identification - USE THE EXACT FIELD NAME FOR EACH TABLE INCLUDING BRACKETS:
@@ -166,6 +220,10 @@ Each table uses different field names for part identification - USE THE EXACT FI
 - ebayNF_SupplierMatch: OEAN (field without brackets)
 - pmsalespbi: Product (internal product code, no brackets)
 - rightScore_results: Product (internal product code, no brackets)
+- rightInventory: Product (internal product code), Site (location), Qty (DECIMAL quantity on hand), 
+  Cost (unit cost), Value (total value), DSI (Days Sales Inventory), Status (Active/Discontinued/In Development/Not Renewed/Not Usable),
+  StockStatus (A/Q/E/R), ActiveOverstock (overstock quantity)
+- QUANTITY COMPARISONS: Always use decimal comparisons (5.0 not 5) and consider FLOOR(Qty) for whole units
 
 CRITICAL JOIN PATTERNS WITH PROPER ALIASES:
 - To get OEANs for a product: SELECT p.[Product], p.[OE] FROM rightStock_ProductOEs p WHERE p.[Product] = 'CHR0406R'
@@ -207,6 +265,21 @@ MARKET INTELLIGENCE QUERIES:
 - Price comparison across sources: SELECT 'MSRP' as Source, o.[Dealer List Price] as Price FROM OEPriceBookPBI o WHERE o.[Part Number] = 'PFF5225R' UNION ALL SELECT 'Competition', AVG(i.[Price]) FROM InternetCompData i WHERE i.[OEAN] = 'PFF5225R' UNION ALL SELECT 'eBay', AVG(TRY_CONVERT(decimal(10,2), e.UnitPrice)) FROM ebayWT e WHERE e.OEAN = 'PFF5225R' AND TRY_CONVERT(decimal(10,2), e.UnitPrice) IS NOT NULL
 - Competition intensity: SELECT [OEAN], COUNT([Competitor Name]) as CompetitorCount, MIN([Price]) as LowestPrice, MAX([Price]) as HighestPrice FROM InternetCompData GROUP BY [OEAN] ORDER BY CompetitorCount DESC
 - Sourcing vs Competition: SELECT s.[OEAN], COUNT(DISTINCT s.[collection]) as SupplierOptions, COUNT(DISTINCT i.[Competitor Name]) as Competitors FROM Suppliers s FULL OUTER JOIN InternetCompData i ON s.[OEAN] = i.[OEAN] GROUP BY s.[OEAN]
+
+INVENTORY ANALYSIS EXAMPLES (DECIMAL-AWARE):
+- Low stock by product: SELECT Product, Site, Qty, FLOOR(Qty) as WholeUnits FROM rightInventory WHERE Qty <= 5.0 AND Status = 'Active' ORDER BY Qty
+- Out of stock: SELECT Product, Site, Qty, Value FROM rightInventory WHERE Qty < 1.0 AND Status = 'Active' ORDER BY Value DESC
+- Inventory summary: SELECT COUNT(*) as Products, SUM(Qty) as TotalUnits, SUM(FLOOR(Qty)) as WholeUnits, SUM(Value) as TotalValue FROM rightInventory WHERE Status = 'Active'
+- Stock by site: SELECT Site, COUNT(*) as Products, SUM(Qty) as TotalUnits, SUM(Value) as TotalValue FROM rightInventory WHERE Status = 'Active' GROUP BY Site ORDER BY TotalValue DESC
+- Critical stock levels: SELECT Product, Qty, FLOOR(Qty) as WholeUnits, Value, CASE WHEN Qty < 1.0 THEN 'OUT' WHEN Qty <= 2.0 THEN 'CRITICAL' WHEN Qty <= 5.0 THEN 'LOW' ELSE 'OK' END as Status FROM rightInventory WHERE Qty <= 5.0 AND Status = 'Active'
+
+# ADD to your comprehensive query examples:
+
+DECIMAL QUANTITY BEST PRACTICES:
+- For "how many X in stock": SELECT Product, Qty, FLOOR(Qty) as WholeUnits FROM rightInventory WHERE Product LIKE '%X%' AND Status = 'Active'
+- For low stock searches: Always use Qty <= 5.0 (not 5) and consider showing both exact and whole units
+- For inventory totals: Use SUM(Qty) for exact totals, SUM(FLOOR(Qty)) for whole unit totals
+- For stock status: Qty < 1.0 = Out of Stock, Qty <= 5.0 = Low Stock, DSI > 365 = Slow Moving
 
 FORBIDDEN TABLE PATTERNS:
 - Tables ending in '_backup', '_temp', '_staging', '_work'
