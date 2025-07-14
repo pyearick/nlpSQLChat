@@ -124,10 +124,16 @@ class Kernel:
                 for message in chat_history[chat_history_count:]:
                     if message.role == AuthorRole.TOOL:
                         for item in message.items:
-                            print("tool {} called and returned {}".format(item.name, item.result))
+                            if hasattr(item, 'name'):
+                                print("tool {} called and returned {}".format(item.name, item.result))
+                            else:
+                                print("tool result: {}".format(str(item)))
                     elif message.role == AuthorRole.ASSISTANT and message.finish_reason == FinishReason.TOOL_CALLS:
                         for item in message.items:
-                            print("tool {} needs to be called with parameters {}".format(item.name, item.arguments))
+                            if hasattr(item, 'name'):
+                                print("tool {} needs to be called with parameters {}".format(item.name, item.arguments))
+                            else:
+                                print("assistant message: {}".format(str(item)))
 
                 return str(response[0])
 
