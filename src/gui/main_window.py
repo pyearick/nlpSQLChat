@@ -8,6 +8,9 @@ import threading
 import time
 import webbrowser
 import re
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from typing import Optional, List
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +55,20 @@ class VoiceClientGUI:
         self.session_id = None
         self.conversation_active = False
         self.current_suggestions = []
+
+        # --- ADD THESE NEW VARIABLES FOR FEEDBACK TRACKING ---
+        self.last_query_sql = None
+        self.last_query_question = None
+        self.last_query_response = None
+        self.last_query_timestamp = None
+
+        # Email configuration for feedback notifications
+        self.feedback_email_config = {
+            'smtp_server': os.getenv('RELAY_IP', 'localhost'),
+            'smtp_port': int(os.getenv('SMTP_PORT', '25')),
+            'from_address': os.getenv('MONITOR_FROM_EMAIL', 'pyearick@crpindustries.com'),
+            'to_addresses': os.getenv('FEEDBACK_TO_EMAILS', '').split(','),
+        }
 
         # --- Speech flags ---
         self.speech_capable = SPEECH_AVAILABLE
@@ -173,6 +190,14 @@ class VoiceClientGUI:
             self.voice_btn = ttk.Button(input_frame, text="🎤 Voice Input (Unavailable)", state=tk.DISABLED)
             self.voice_btn.grid(row=0, column=2, padx=(0, 2))
 
+        # ADD FEEDBACK BUTTON HERE
+        self.feedback_button = ttk.Button(
+            input_frame,
+            text="⚠️ Wrong Answer",
+            command=self.report_wrong_answer,
+            state='disabled'  # Initially disabled
+        )
+        self.feedback_button.grid(row=0, column=3, padx=(5, 0))
     def create_status_bar(self, parent):
         status_frame = ttk.Frame(parent)
         status_frame.grid(row=3, column=0, sticky="ew")
@@ -284,6 +309,15 @@ class VoiceClientGUI:
         text = self.input_entry.get().strip()
         if not text:
             return
+
+        # TRACK THE QUERY FOR FEEDBACK
+        self.last_query_question = text
+        self.last_query_timestamp = datetime.now()
+        self.last_query_sql = None  # Will be populated if we get SQL info back
+
+        # Disable feedback button during query processing
+        self.feedback_button.config(state='disabled')
+
         self.log_message(text, "user")
         self.input_entry.delete(0, tk.END)
         self.status_label.config(text="Waiting for response...")
@@ -299,12 +333,23 @@ class VoiceClientGUI:
                 data = response.json()
                 answer = data.get("answer", "")
                 self.session_id = data.get("session_id", self.session_id)
+
+                # STORE RESPONSE AND EXTRACT SQL IF AVAILABLE
+                self.last_query_response = answer
+                self.extract_sql_from_response(answer)
+
                 self.show_response(answer)
+
+                # ENABLE FEEDBACK BUTTON AFTER SUCCESSFUL RESPONSE
+                self.feedback_button.config(state='normal')
             else:
                 error = f"Server error: {response.status_code} {response.text}"
+                self.last_query_response = error
                 self.show_response(error, is_error=True)
         except Exception as e:
-            self.show_response(f"Connection failed: {e}", is_error=True)
+            error = f"Connection failed: {e}"
+            self.last_query_response = error
+            self.show_response(error, is_error=True)
 
     # ----- SHOW RESPONSE -----
     def show_response(self, text, is_error=False):
@@ -504,6 +549,16 @@ class VoiceClientGUI:
         self.session_id = None  # Clear old session
         self.conversation_active = False
         self.current_suggestions = []
+
+        # RESET FEEDBACK TRACKING
+        self.last_query_sql = None
+        self.last_query_question = None
+        self.last_query_response = None
+        self.last_query_timestamp = None
+
+        # Disable feedback button
+        self.feedback_button.config(state='disabled')
+
         self.log_message("Server session reset - starting fresh conversation", "system")
 
 # Reset the stop request flag
@@ -535,6 +590,135 @@ class VoiceClientGUI:
         except Exception as e:
             self.status_label.config(text=f"Connection failed: {e}")
             self.log_message(f"Connection failed: {e}", "error")
+
+    def extract_sql_from_response(self, response_text):
+        """Extract SQL query from the response if present"""
+
+        # Look for SQL patterns in the response
+        sql_patterns = [
+            r'```sql\n(.*?)\n```',  # Markdown SQL blocks
+            r'```\n(SELECT.*?)\n```',  # Generic code blocks with SELECT
+            r'(SELECT\s+.*?;)',  # Standalone SELECT statements
+            r'SQL:\s*(SELECT.*?)(?:\n|$)',  # SQL: prefix
+        ]
+
+        for pattern in sql_patterns:
+            matches = re.findall(pattern, response_text, re.DOTALL | re.IGNORECASE)
+            if matches:
+                # Take the first match and clean it up
+                sql = matches[0].strip()
+                if sql:
+                    self.last_query_sql = sql
+                    break
+
+    def report_wrong_answer(self):
+        """Handle the wrong answer feedback button click"""
+        if not self.last_query_question:
+            messagebox.showwarning("No Query", "No recent query to report on.")
+            return
+
+        # Create feedback log entry
+        self.log_wrong_answer_feedback()
+
+        # Send email notification if configured
+        self.send_feedback_email()
+
+        # Show confirmation to user
+        messagebox.showinfo(
+            "Feedback Submitted",
+            "Thank you for the feedback! The issue has been logged and an administrator has been notified."
+        )
+
+        # Disable the button to prevent duplicate reports
+        self.feedback_button.config(state='disabled')
+
+    def log_wrong_answer_feedback(self):
+        """Log the wrong answer feedback to the system log"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        log_entry = {
+            "timestamp": timestamp,
+            "event_type": "WRONG_ANSWER_FEEDBACK",
+            "session_id": self.session_id,
+            "user_question": self.last_query_question,
+            "system_response": self.last_query_response,
+            "sql_query": self.last_query_sql if self.last_query_sql else "No SQL available",
+            "query_timestamp": self.last_query_timestamp.strftime(
+                "%Y-%m-%d %H:%M:%S") if self.last_query_timestamp else "Unknown"
+        }
+
+        # Log to the standard logger (you might want to set up logging if not already done)
+        print(f"WRONG ANSWER REPORTED: {json.dumps(log_entry, indent=2)}")
+
+        # Also write to a dedicated feedback log file
+        try:
+            feedback_log_dir = Path("C:/Logs")
+            feedback_log_dir.mkdir(exist_ok=True)
+
+            feedback_log_file = feedback_log_dir / "voice_sql_feedback.log"
+
+            with open(feedback_log_file, 'a', encoding='utf-8') as f:
+                f.write(f"{json.dumps(log_entry)}\n")
+
+        except Exception as e:
+            print(f"Failed to write to feedback log file: {e}")
+
+    def send_feedback_email(self):
+        """Send email notification about wrong answer feedback"""
+        # Check if email is configured
+        to_addresses = [addr.strip() for addr in self.feedback_email_config['to_addresses'] if addr.strip()]
+
+        if not to_addresses:
+            # Log that email wasn't sent due to missing configuration
+            print("Feedback email not sent - no recipient addresses configured")
+            return
+
+        try:
+            # Prepare email content
+            subject = f"[Voice SQL] Wrong Answer Reported - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+            body = f"""
+A user has reported a wrong answer from the Voice SQL system.
+
+Session Details:
+- Session ID: {self.session_id}
+- Timestamp: {self.last_query_timestamp.strftime('%Y-%m-%d %H:%M:%S') if self.last_query_timestamp else 'Unknown'}
+
+User Question:
+{self.last_query_question}
+
+System Response:
+{self.last_query_response}
+
+SQL Query Used:
+{self.last_query_sql if self.last_query_sql else 'No SQL query information available'}
+
+Please review the feedback log for additional details:
+C:/Logs/voice_sql_feedback.log
+
+This feedback was automatically generated by the Voice SQL Client.
+            """
+
+            # Create email message
+            msg = MIMEMultipart()
+            msg['From'] = self.feedback_email_config['from_address']
+            msg['To'] = ', '.join(to_addresses)
+            msg['Subject'] = subject
+            msg.attach(MIMEText(body, 'plain'))
+
+            # Send email
+            with smtplib.SMTP(
+                    self.feedback_email_config['smtp_server'],
+                    self.feedback_email_config['smtp_port']
+            ) as server:
+                server.send_message(msg)
+
+            # Log successful email send
+            print(f"Feedback email sent successfully to {to_addresses}")
+
+        except Exception as e:
+            # Log email failure but don't fail the feedback process
+            print(f"Failed to send feedback email: {e}")
 
 # ---- MAIN APP ENTRY ----
 if __name__ == "__main__":
