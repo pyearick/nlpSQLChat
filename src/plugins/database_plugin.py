@@ -22,7 +22,7 @@ Query the CRPAF database using SQL Server syntax.
 IMPORTANT: Only query these approved production tables:
 
 ACTUAL SALES DATA (INVOICE-BASED):
-- pmsalespbi: ACTUAL INVOICE SALES DATA by customer (PRIMARY SALES TABLE).
+- PMSalesPBI: ACTUAL INVOICE SALES DATA by customer (PRIMARY SALES TABLE).
   Key columns: CaptureDate, Company, CustomerGroup, CustomerName, Product, ProductCategoryID,
   ProdDivID, ProdGroupID, ProdGroupDes, Quantity, Sales, Cost, Margin, InvMonth, InvQuarter, InvWeek, InvYear, InvDate
   Use this table when users ask about 'sales to customers', 'how much did we sell', 'revenue', 'margins', 'product categories'
@@ -40,16 +40,33 @@ PRODUCT PERFORMANCE & INVENTORY ANALYTICS:
   Use this table for questions about 'product performance', 'inventory optimization', 'dead stock', 'product scoring'
 
 CURRENT_INVENTORY_DATA:
-- rightInventory: CURRENT INVENTORY LEVELS & COSTS (updated daily at 5 AM from BIWarehouse).
-  Key columns: CaptureDate, Company, Division, Brand, Product, PDescription, Status, Site, StockStatus, Qty, Cost, Value, DSI, ActiveOverstock, ValuewOVS
+- rightInventory: CURRENT INVENTORY LEVELS & COSTS updated monthly (PRIMARY INVENTORY TABLE).
+  Key columns: InventoryDate, Company, Division, Brand, Product, PDescription, Status, Site, StockStatus, Qty, Cost, Value, DSI, ActiveOverstock, ValuewOVS
   IMPORTANT: Qty is stored as DECIMAL/FLOAT - use Qty <= 5.0 not Qty <= 5 for comparisons
+⚠️ CRITICAL INVENTORY QUERY RULE: 
+ALL rightInventory queries for current inventory MUST include these filters:
+- Status = 'Active' (for active products only)
+- Company = 'CRP' (for CRPAF US-focused results)  
+- Division = 'AUT' (automotive division only, separate from industrial)
+- InventoryDate = (SELECT MAX(InventoryDate) FROM rightInventory WHERE Company = 'CRP' AND Division = 'AUT') (most recent inventory)
+
+NEVER use basic patterns like: SELECT * FROM rightInventory WHERE Product = 'ABC123'
+ALWAYS use complete patterns like: SELECT Product, Qty FROM rightInventory WHERE Product = 'ABC123' AND Status = 'Active' AND Company = 'CRP' AND Division = 'AUT' AND InventoryDate = (SELECT MAX(InventoryDate) FROM rightInventory WHERE Company = 'CRP' AND Division = 'AUT')
+  
+  For category-based inventory queries, you MUST JOIN with pmsalespbi:
+  - Category inventory: SELECT p.ProdGroupDes, SUM(r.Qty) as TotalQty, SUM(r.Value) as TotalValue FROM rightInventory r JOIN pmsalespbi p ON r.Product = p.Product WHERE r.Status = 'Active' AND Division = 'AUT' and Company = 'CRP' AND UPPER(p.ProdGroupDes) LIKE UPPER('%COOLANT HOSES%') GROUP BY p.ProdGroupDes
+  - Low stock by category: SELECT r.Product, r.Qty, p.ProdGroupDes FROM rightInventory r JOIN pmsalespbi p ON r.Product = p.Product WHERE r.Status = 'Active'  AND Division = 'AUT' and Company = 'CRP' AND r.Qty < 5.0 AND UPPER(p.ProdGroupDes) LIKE UPPER('%COOLANT HOSES%')
+  WRONG: SELECT * FROM rightInventory WHERE ProdGroupDes = 'Coolant Hoses' (ProdGroupDes doesn't exist)
+  RIGHT: SELECT r.*, p.ProdGroupDes FROM rightInventory r JOIN pmsalespbi p ON r.Product = p.Product WHERE UPPER(p.ProdGroupDes) LIKE UPPER('%COOLANT HOSES%')  AND Division = 'AUT' and Company = 'CRP'
   FIELD CLARIFICATION: 
   - Status = full descriptions ('Active', 'Discontinued', 'In Development', 'Not Renewed', 'Not Usable')
   - StockStatus = classification codes ('A', 'Q', 'R', etc.) - include both fields in results
   - Qty = decimal quantity on hand, Cost = unit cost, Value = total inventory value (Qty × Cost)
   - DSI = Days Sales Inventory (higher = slower moving)
+  - Company = 'CRP' (always use this company for CRPAF queries which keeps the answers US focused)
+    - Division = 'AUT' (always use the 'AUT' division for CRPAF queries which keeps the answers separate from industrial products)
   For active inventory use: WHERE Status = 'Active' (primary filter)
-  Updated daily with fresh data from BIWarehouse InventoryDaily table
+  Inventory quantities are updated monthly with fresh data monthly, always use the latest InventoryDate in the response unless the user wants to know inventory history.
   Use this table for questions about 'current inventory', 'stock levels', 'inventory costs', 'overstock', 'dead stock', 'inventory value'
 
 EBAY MARKET DATA (COMPETITIVE INTELLIGENCE):
@@ -57,9 +74,9 @@ EBAY MARKET DATA (COMPETITIVE INTELLIGENCE):
   Key columns: OEAN, UnitPrice (nvarchar - convert to numeric for calculations), Quantity, CaptureDate, SellerID, Title, EndTime
   IMPORTANT: UnitPrice is stored as nvarchar(100) - use TRY_CONVERT(decimal(10,2), UnitPrice) for numeric operations
 - ebayWT_NF: eBay auctions for parts NOT in our inventory (competitive analysis).
-  Key columns: OEAN, DeltaSold (sales indicator), SoldPrice, SoldDate
-- ebayNF_SupplierMatch: Competitor parts with supplier matching data.
-  Key columns: OEAN, SupplierName, SupplierPrice, PartDescription (NOTE: Supplier fields may be NULL)
+  Key columns: OEAN, DeltaSold (sales indicator), SoldDate
+- eBayNF_SupplierMatch: Competitor parts with supplier matching data.
+  Key columns: OEAN, SupplierName, PartDescription (NOTE: Supplier fields may be NULL)
 
 PRICING DATA (OE MSRP & SUPERSESSIONS):
 - OEPriceBookPBI: OE MANUFACTURER PRICING DATA from Standard Motor Products (monthly updates).
@@ -96,6 +113,31 @@ PRODUCT-TO-OEAN MAPPING (ROSETTA STONE):
   Product mapping: SELECT [Product], [OE] FROM rightStock_ProductOEs WHERE [Product] = 'HP1000'
   OEAN lookup: SELECT [Product] FROM rightStock_ProductOEs WHERE [OE] = 'PFF5225R'
   Product OEAN count: SELECT [Product], COUNT([OE]) as OEANCount FROM rightStock_ProductOEs GROUP BY [Product] ORDER BY OEANCount DESC
+
+INTELLIGENT RESULT HANDLING:
+When queries return large result sets, provide CONTEXTUAL responses instead of generic "large results" messages:
+
+For EXPLORATORY queries ("which products", "show me", "what parts"):
+- Provide a SUMMARY first: "Found 1,247 products with low performance scores across 15 categories"
+- Show MEANINGFUL SAMPLE: "Here are the worst 10 performers:" 
+- Offer SPECIFIC next steps: "Would you like to see: 1) Specific category 2) Worst performers by value 3) Export all results"
+
+For RANKING queries ("best-selling", "highest", "trending"):
+- Always show TOP results: "Here are the top 10 best-selling filters:"
+- Provide CONTEXT: "These represent 45% of total filter sales"
+- Suggest DRILL-DOWN: "Want to see specific customer performance or time trends?"
+
+For PROBLEM IDENTIFICATION ("dead stock", "out of stock", "low performance"):
+- Prioritize by BUSINESS IMPACT: "Found 156 dead stock items worth $2.3M total value"
+- Show ACTIONABLE sample: "Here are the 10 highest-value dead stock items:"
+- Suggest SOLUTIONS: "Consider: 1) Clearance pricing 2) Return to supplier 3) Detailed category analysis"
+
+EXAMPLES OF GOOD RESPONSES:
+Instead of: "Large results. 1) Sample 2) Export"
+Say: "Found 847 products with low performance scores (OverallScore ≤ 2). These represent $1.2M in inventory value across 23 categories. Here are the 10 worst performers by inventory value: [results]. Would you like to focus on a specific category or see recommendations for action?"
+
+Instead of: "Large results. 1) Sample 2) Export" 
+Say: "Your eBay search found 156 transmission filter listings across 27 different brands. Top brands by listing volume: Ford (34 listings), Chevy (28 listings), Toyota (19 listings). Which brand would you like to explore, or shall I show you price trends across all brands?"
 
 360° OEAN INTELLIGENCE QUERIES (COMPREHENSIVE PART ANALYSIS):
 When users ask about a specific OEAN, provide comprehensive intelligence across all tables:
@@ -136,9 +178,9 @@ SOURCING & PROCUREMENT QUERIES:
 
 PRODUCT CATEGORY QUERIES (ProdGroupDes-based searches):
 - Category inventory summary: SELECT ProdGroupDes, COUNT(*) as ProductCount, SUM(Qty) as TotalQty, SUM(Value) as TotalValue FROM rightInventory WHERE Status = 'Active' AND UPPER(ProdGroupDes) LIKE UPPER('%COOLANT HOSES%') GROUP BY ProdGroupDes
-- Products in category: SELECT Product, ProdGroupDes, Site, Qty, Value FROM rightInventory WHERE Status = 'Active' AND UPPER(ProdGroupDes) LIKE UPPER('%COOLANT HOSES%') ORDER BY Value DESC
+- Products in category: SELECT DISTINCT Product, ProdGroupDes FROM PMSalesPBI WHERE Status = 'Active' AND UPPER(ProdGroupDes) LIKE UPPER('%COOLANT HOSES%') ORDER BY Product
 - Category stock levels: SELECT Product, ProdGroupDes, Qty, FLOOR(Qty) as WholeUnits, CASE WHEN Qty < 1.0 THEN 'OUT' WHEN Qty <= 5.0 THEN 'LOW' ELSE 'OK' END as StockLevel FROM rightInventory WHERE Status = 'Active' AND UPPER(ProdGroupDes) LIKE UPPER('%HPS-PUMPS%')
-- Find product's category: SELECT Product, ProdGroupDes FROM rightInventory WHERE Status = 'Active' AND Product = 'CHR0406R'
+- Find product's category: SELECT Product, ProdGroupDes FROM PMSalesPBI WHERE Status = 'Active' AND Product = 'CHR0406R' AND Company = 'CRP' AND Division = 'AUT'
 - All available categories: SELECT DISTINCT ProdGroupDes FROM rightInventory WHERE Status = 'Active' AND ProdGroupDes IS NOT NULL ORDER BY ProdGroupDes
 
 CATEGORY SEARCH BEST PRACTICES:
@@ -267,16 +309,16 @@ MARKET INTELLIGENCE QUERIES:
 - Sourcing vs Competition: SELECT s.[OEAN], COUNT(DISTINCT s.[collection]) as SupplierOptions, COUNT(DISTINCT i.[Competitor Name]) as Competitors FROM Suppliers s FULL OUTER JOIN InternetCompData i ON s.[OEAN] = i.[OEAN] GROUP BY s.[OEAN]
 
 INVENTORY ANALYSIS EXAMPLES (DECIMAL-AWARE):
-- Low stock by product: SELECT Product, Site, Qty, FLOOR(Qty) as WholeUnits FROM rightInventory WHERE Qty <= 5.0 AND Status = 'Active' ORDER BY Qty
-- Out of stock: SELECT Product, Site, Qty, Value FROM rightInventory WHERE Qty < 1.0 AND Status = 'Active' ORDER BY Value DESC
-- Inventory summary: SELECT COUNT(*) as Products, SUM(Qty) as TotalUnits, SUM(FLOOR(Qty)) as WholeUnits, SUM(Value) as TotalValue FROM rightInventory WHERE Status = 'Active'
-- Stock by site: SELECT Site, COUNT(*) as Products, SUM(Qty) as TotalUnits, SUM(Value) as TotalValue FROM rightInventory WHERE Status = 'Active' GROUP BY Site ORDER BY TotalValue DESC
-- Critical stock levels: SELECT Product, Qty, FLOOR(Qty) as WholeUnits, Value, CASE WHEN Qty < 1.0 THEN 'OUT' WHEN Qty <= 2.0 THEN 'CRITICAL' WHEN Qty <= 5.0 THEN 'LOW' ELSE 'OK' END as Status FROM rightInventory WHERE Qty <= 5.0 AND Status = 'Active'
+- Low stock by product: SELECT Product, Site, Qty, FLOOR(Qty) as WholeUnits FROM rightInventory WHERE Qty <= 5.0 AND Status = 'Active' AND Company = 'CRP' AND Division = 'AUT' AND InventoryDate = (SELECT MAX(InventoryDate) FROM rightInventory WHERE Company = 'CRP' AND Division = 'AUT') ORDER BY Qty
+- Out of stock: SELECT Product, Site, Qty, Value FROM rightInventory WHERE Qty < 1.0 AND Status = 'Active' AND Company = 'CRP' AND Division = 'AUT' AND InventoryDate = (SELECT MAX(InventoryDate) FROM rightInventory WHERE Company = 'CRP' AND Division = 'AUT') ORDER BY Value DESC
+- Inventory summary: SELECT COUNT(*) as Products, SUM(Qty) as TotalUnits, SUM(FLOOR(Qty)) as WholeUnits, SUM(Value) as TotalValue FROM rightInventory WHERE Status = 'Active' AND Company = 'CRP' AND Division = 'AUT' AND InventoryDate = (SELECT MAX(InventoryDate) FROM rightInventory WHERE Company = 'CRP' AND Division = 'AUT')
+- Stock by site: SELECT Site, COUNT(*) as Products, SUM(Qty) as TotalUnits, SUM(Value) as TotalValue FROM rightInventory WHERE Status = 'Active' AND Company = 'CRP' AND Division = 'AUT' AND InventoryDate = (SELECT MAX(InventoryDate) FROM rightInventory WHERE Company = 'CRP' AND Division = 'AUT') GROUP BY Site ORDER BY TotalValue DESC
+- Critical stock levels: SELECT Product, Qty, FLOOR(Qty) as WholeUnits, Value, CASE WHEN Qty < 1.0 THEN 'OUT' WHEN Qty <= 2.0 THEN 'CRITICAL' WHEN Qty <= 5.0 THEN 'LOW' ELSE 'OK' END as Status FROM rightInventory WHERE Qty <= 5.0 AND Status = 'Active' AND Company = 'CRP' AND Division = 'AUT' AND InventoryDate = (SELECT MAX(InventoryDate) FROM rightInventory WHERE Company = 'CRP' AND Division = 'AUT')
 
 # ADD to your comprehensive query examples:
 
 DECIMAL QUANTITY BEST PRACTICES:
-- For "how many X in stock": SELECT Product, Qty, FLOOR(Qty) as WholeUnits FROM rightInventory WHERE Product LIKE '%X%' AND Status = 'Active'
+- - For "how many X in stock": SELECT Product, Qty, FLOOR(Qty) as WholeUnits FROM rightInventory WHERE Product LIKE '%X%' AND Status = 'Active' AND Company = 'CRP' AND Division = 'AUT' AND InventoryDate = (SELECT MAX(InventoryDate) FROM rightInventory WHERE Company = 'CRP' AND Division = 'AUT')
 - For low stock searches: Always use Qty <= 5.0 (not 5) and consider showing both exact and whole units
 - For inventory totals: Use SUM(Qty) for exact totals, SUM(FLOOR(Qty)) for whole unit totals
 - For stock status: Qty < 1.0 = Out of Stock, Qty <= 5.0 = Low Stock, DSI > 365 = Slow Moving
@@ -326,6 +368,7 @@ class DatabasePlugin:
         try:
             query_upper = query.strip().upper()
 
+            # Simple heuristic: if it's a basic SELECT * FROM table, get exact count
             if query_upper.startswith('SELECT *') and 'WHERE' not in query_upper and 'JOIN' not in query_upper:
                 parts = query_upper.split()
                 if len(parts) >= 4 and parts[1] == '*' and parts[2] == 'FROM':
@@ -335,11 +378,15 @@ class DatabasePlugin:
                     if result and not isinstance(result, str):
                         return result[0][0]
 
+            # For complex queries, strip ORDER BY before wrapping in COUNT
             count_query = query
             if 'ORDER BY' in query_upper:
+                # Find ORDER BY position using case-insensitive search
                 order_by_pos = query_upper.rfind('ORDER BY')
+                # Strip from original query (preserving case)
                 count_query = query[:order_by_pos].strip()
 
+            # Wrap in COUNT subquery
             count_query = f"SELECT COUNT(*) FROM ({count_query}) AS count_subquery"
             result = self.db.query(count_query)
 
@@ -349,7 +396,7 @@ class DatabasePlugin:
         except Exception as e:
             logger.warning(f"Could not estimate row count: {e}")
 
-        return -1
+        return -1  # Unknown
 
     def _export_to_file(self, query: str, file_format: str = 'csv') -> str:
         """Export query results to a file"""
@@ -428,13 +475,19 @@ class DatabasePlugin:
 
         estimated_rows = self._estimate_row_count(query)
 
+        # In database_plugin.py query method
         if estimated_rows > self.max_display_rows:
-            return (f"WARNING: This query will return approximately {estimated_rows:,} rows, "
-                    f"which is too large to display. Consider:\n"
-                    f"1. Adding 'TOP {self.max_display_rows}' to see a sample\n"
-                    f"2. Adding WHERE conditions to filter the data\n"
-                    f"3. Ask me to 'export the full results to CSV file' if you need all data\n\n"
-                    f"Would you like me to show just the first {self.max_display_rows} rows instead?")
+            # Get a small sample automatically
+            sample_query = f"SELECT TOP 5 * FROM ({query}) AS sample_results"
+            sample_results = self.db.query(sample_query)
+
+            return (f"Found {estimated_rows:,} records. Here are the first 5 results:\n\n" +
+                    str(sample_results) +
+                    f"\n\nFull dataset contains {estimated_rows:,} rows. " +
+                    f"Would you like to:\n" +
+                    f"1) See more specific results with filters\n" +
+                    f"2) Export all {estimated_rows:,} records to CSV\n" +
+                    f"3) Show me the generated SQL query")
 
         result = self.db.query(query)
 
