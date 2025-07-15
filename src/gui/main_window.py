@@ -48,7 +48,7 @@ class VoiceClientGUI:
         # --- Config ---
         self.server_url = os.getenv("VOICE_SQL_SERVER", "http://BI-SQL001:8000").rstrip('/')
         self.session = requests.Session()
-        self.session.timeout = 30
+        self.session.timeout = 60
         self.session_id = None
         self.conversation_active = False
         self.current_suggestions = []
@@ -294,7 +294,7 @@ class VoiceClientGUI:
         try:
             payload = {"question": text, "session_id": self.session_id}
             url = f"{self.server_url}/ask"
-            response = self.session.post(url, json=payload, timeout=30)
+            response = self.session.post(url, json=payload, timeout=90)
             if response.status_code == 200:
                 data = response.json()
                 answer = data.get("answer", "")
@@ -499,13 +499,34 @@ class VoiceClientGUI:
         except Exception as e:
             self.log_message(f"Failed to stop TTS: {e}", "error")
 
+    def reset_server_session(self):
+        """Reset session when server is restarted"""
+        self.session_id = None  # Clear old session
+        self.conversation_active = False
+        self.current_suggestions = []
+        self.log_message("Server session reset - starting fresh conversation", "system")
+
+# Reset the stop request flag
     # ----- TEST SERVER CONNECTION -----
     def test_connection(self):
-        """Test if the server is up and reachable."""
+        """Test connection and reset session if server restarted"""
         try:
             url = f"{self.server_url}/health"
             response = self.session.get(url, timeout=5)
             if response.status_code == 200:
+                # Check if our session_id is still valid
+                if self.session_id:
+                    status_url = f"{self.server_url}/conversation_state/{self.session_id}"
+                    try:
+                        session_check = self.session.get(status_url, timeout=5)
+                        if session_check.status_code == 404:
+                            # Session doesn't exist on server - reset
+                            self.reset_server_session()
+                            self.log_message("Detected server restart - session reset", "system")
+                    except:
+                        # Assume server restart if we can't check session
+                        self.reset_server_session()
+
                 self.status_label.config(text="Connected to server.")
                 self.log_message("Connected to server.", "system")
             else:
@@ -514,6 +535,7 @@ class VoiceClientGUI:
         except Exception as e:
             self.status_label.config(text=f"Connection failed: {e}")
             self.log_message(f"Connection failed: {e}", "error")
+
 # ---- MAIN APP ENTRY ----
 if __name__ == "__main__":
     root = tk.Tk()
