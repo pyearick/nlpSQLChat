@@ -612,24 +612,41 @@ class VoiceClientGUI:
                     break
 
     def report_wrong_answer(self):
-        """Handle the wrong answer feedback button click"""
+        """Send feedback to server instead of handling locally"""
         if not self.last_query_question:
             messagebox.showwarning("No Query", "No recent query to report on.")
             return
 
-        # Create feedback log entry
-        self.log_wrong_answer_feedback()
+        try:
+            # Prepare feedback data
+            feedback_data = {
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "event_type": "WRONG_ANSWER_FEEDBACK",
+                "session_id": self.session_id,
+                "user_question": self.last_query_question,
+                "system_response": self.last_query_response,
+                "sql_query": self.last_query_sql if self.last_query_sql else "No SQL available",
+                "query_timestamp": self.last_query_timestamp.strftime(
+                    "%Y-%m-%d %H:%M:%S") if self.last_query_timestamp else "Unknown"
+            }
 
-        # Send email notification if configured
-        self.send_feedback_email()
+            # Send to server
+            response = self.session.post(
+                f"{self.server_url}/feedback",
+                json=feedback_data,
+                timeout=10
+            )
 
-        # Show confirmation to user
-        messagebox.showinfo(
-            "Feedback Submitted",
-            "Thank you for the feedback! The issue has been logged and an administrator has been notified."
-        )
+            if response.status_code == 200:
+                messagebox.showinfo("Feedback Submitted",
+                                    "Thank you for the feedback! The issue has been logged and an administrator has been notified.")
+            else:
+                messagebox.showerror("Error", "Failed to submit feedback. Please try again.")
 
-        # Disable the button to prevent duplicate reports
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to submit feedback: {e}")
+
+        # Disable button regardless
         self.feedback_button.config(state='disabled')
 
     def log_wrong_answer_feedback(self):
