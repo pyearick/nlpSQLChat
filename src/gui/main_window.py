@@ -411,6 +411,14 @@ class VoiceClientGUI:
                 try:
                     self.tts_engine.say(sentence)
                     self.tts_engine.runAndWait()
+                except RuntimeError as e:
+                    if "run loop already started" in str(e):
+                        self.log_message("TTS temporarily unavailable for this sentence", "system")
+                    else:
+                        self.log_message(f"TTS Runtime error: {e}", "error")
+                    # Try to reinitialize for next time
+                    self.tts_engine_valid = False
+                    break
                 except Exception as e:
                     self.log_message(f"TTS sentence error: {e}", "error")
                     # Try to reinitialize for next time
