@@ -421,7 +421,12 @@ class VoiceClientGUI:
             self.log_message(f"TTS Error: {e}", "error")
             # Mark engine as needing reinitialization
             self.tts_engine_valid = False
-
+        except RuntimeError as e:
+            if "run loop already started" in str(e):
+                # Just log it and continue - don't break the user experience
+                self.log_message("TTS temporarily unavailable", "system")
+            else:
+                self.log_message(f"TTS Error: {e}", "error")
         finally:
             # Clean up UI state
             self.is_speaking = False
