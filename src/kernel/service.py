@@ -235,24 +235,35 @@ class Kernel:
                 # Add user message to chat history
                 chat_history.add_user_message(user_input)
 
-                # Get response from kernel with automatic function calling
-                responses = await self.kernel.invoke_stream(
-                    function_name=None,
-                    plugin_name=None,
-                    arguments=KernelArguments(),
-                    function_call_behavior=self.execution_settings.function_call_behavior,
+                # Create kernel arguments (required for auto function calling)
+                kernel_arguments = KernelArguments()
+
+                # Use the chat completion service directly with function calling enabled
+                response = await self.chat_completion.get_chat_message_contents(
                     chat_history=chat_history,
-                    settings=self.execution_settings
+                    settings=self.execution_settings,
+                    kernel=self.kernel,  # This enables function calling with plugins
+                    arguments=kernel_arguments  # Required for auto invoking tool calls
                 )
 
-                # Collect and return the response
+                # Extract response text from the response
                 response_text = ""
-                async for response in responses:
-                    if hasattr(response, 'content') and response.content:
-                        response_text += str(response.content)
+                if response and len(response) > 0:
+                    # Get the last response message
+                    last_message = response[-1]
+                    if hasattr(last_message, 'content') and last_message.content:
+                        response_text = str(last_message.content)
+                    elif hasattr(last_message, 'value') and last_message.value:
+                        response_text = str(last_message.value)
+                    else:
+                        response_text = str(last_message)
 
                 # Add assistant response to chat history
                 if response_text.strip():
+                    chat_history.add_assistant_message(response_text)
+                else:
+                    # Fallback if no content
+                    response_text = "I received your request but couldn't generate a response."
                     chat_history.add_assistant_message(response_text)
 
                 return response_text
@@ -274,6 +285,9 @@ class Kernel:
 
             except Exception as e:
                 logger.error(f"Error in message processing: {e}")
+                logger.debug(f"Response object type: {type(response) if 'response' in locals() else 'undefined'}")
+                logger.debug(f"Response content: {response if 'response' in locals() else 'undefined'}")
+
                 if attempt < max_retries:
                     logger.info(f"Retrying due to error (attempt {attempt + 2}/{max_retries + 1})...")
                     continue

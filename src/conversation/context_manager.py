@@ -3,6 +3,7 @@
 import re
 import json
 from datetime import datetime
+from semantic_kernel.contents.chat_history import ChatHistory
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 import logging
@@ -28,6 +29,9 @@ class ConversationMemory:
     def __init__(self):
         self.current_context: Optional[QueryContext] = None
         self.conversation_history: List[QueryContext] = []
+        # ADD THIS LINE - Create the chat_history that the kernel expects
+        self.chat_history = ChatHistory()
+
         self.entities = {
             'customers': set(),
             'parts': set(),
@@ -168,6 +172,12 @@ class ConversationMemory:
             return f"Query returned data with key values: {', '.join(numbers[:3])}"
         else:
             return results[:100] + "..." if len(results) > 100 else results
+
+    def add_exchange(self, question: str, response: str):
+        """Add a question-response exchange to both conversation memory and chat history"""
+        # Add to the kernel's chat history format
+        self.chat_history.add_user_message(question)
+        self.chat_history.add_assistant_message(response)
 
     def resolve_pronouns(self, query: str) -> str:
         """Replace pronouns and references with actual entities"""

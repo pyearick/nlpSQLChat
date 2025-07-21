@@ -303,13 +303,15 @@ async def lifespan(app: FastAPI):
         credential = initialize_azure_services(config)
         if credential and config['openai_endpoint'] and config['openai_deployment_name']:
             try:
+                # Pass session_id to enable caching - use default session for global kernel
                 kernel = Kernel(
                     database_service=database_service,
                     credential=credential,
                     openai_endpoint=config['openai_endpoint'],
-                    openai_deployment_name=config['openai_deployment_name']
+                    openai_deployment_name=config['openai_deployment_name'],
+                    session_id="global_session"  # ADD THIS LINE
                 )
-                logger.info("Semantic kernel initialized with automatic token refresh")
+                logger.info("Semantic kernel initialized with session caching and automatic token refresh")
             except Exception as e:
                 logger.error(f"AI kernel initialization failed: {e}", exc_info=True)
                 logger.info("Falling back to simple kernel")
@@ -397,10 +399,38 @@ async def ask_question(request: QueryRequest) -> QueryResponse:
         # Get or create conversation session
         session_id, conversation_memory = get_conversation_session(request.session_id)
 
+        # Determine which kernel to use based on session caching capability
+        active_kernel = None
+
+        if hasattr(kernel, 'get_cache_stats'):  # Enhanced kernel with session caching
+            # Create session-specific kernel instance for optimal caching
+            logger.debug(f"Creating session-specific kernel for session: {session_id}")
+
+            # Get the kernel configuration from the global kernel
+            active_kernel = Kernel(
+                database_service=kernel.database_service,
+                credential=kernel.credential,
+                openai_endpoint=kernel.openai_endpoint,
+                openai_deployment_name=kernel.openai_deployment_name,
+                session_id=session_id  # This enables session-specific caching
+            )
+
+            # Log cache statistics for monitoring
+            cache_stats = active_kernel.get_cache_stats()
+            logger.info(f"Session {session_id} cache stats: {cache_stats}")
+
+        else:
+            # Fallback to global kernel (SimpleKernel or non-caching kernel)
+            logger.debug("Using global kernel (no session caching available)")
+            active_kernel = kernel
+
+            # Set session context on existing kernel if it supports it
+            if hasattr(kernel, 'session_id'):
+                kernel.session_id = session_id
+
         # Handle option selection from client
         if request.question.lower().strip().startswith("option "):
             try:
-                # Extract option number and convert to full query
                 enhanced_question = conversation_memory.handle_follow_up_selection(request.question)
                 if enhanced_question:
                     logger.info(f"Converted option selection to: {enhanced_question}")
@@ -418,23 +448,70 @@ async def ask_question(request: QueryRequest) -> QueryResponse:
             export_instruction = f" Please export the results to {request.export_format} format."
             enhanced_question = enhanced_question + export_instruction
 
-        # Get response from kernel
-        response = await kernel.message(enhanced_question, chat_history)
+        # Get response from the appropriate kernel (with session caching if available)
+        response = await active_kernel.message(enhanced_question, conversation_memory.chat_history)
         logger.info("Response generated successfully")
 
-        # Generate follow-up suggestions
+        # Update conversation memory with the original question and response
+        conversation_memory.add_exchange(request.question, str(response))
+
+        # Generate follow-up suggestions based on conversation context
         suggestions = generate_follow_up_suggestions(conversation_memory, str(response))
 
-        return QueryResponse(
-            answer=str(response),
-            status="success",
-            session_id=session_id,
-            suggestions=suggestions if suggestions else None
-        )
+        # Prepare response with optional cache information for debugging
+        response_data = {
+            "answer": str(response),
+            "status": "success",
+            "session_id": session_id,
+            "suggestions": suggestions if suggestions else None
+        }
+
+        # Add cache info for debugging if available (optional)
+        if hasattr(active_kernel, 'get_cache_stats'):
+            final_cache_stats = active_kernel.get_cache_stats()
+            logger.debug(f"Final cache stats for session {session_id}: {final_cache_stats}")
+            # Optionally include in response for debugging:
+            # response_data["debug_cache_stats"] = final_cache_stats
+
+        return QueryResponse(**response_data)
+
     except Exception as e:
-        logger.error(f"Error processing question: {e}")
+        logger.error(f"Error processing question: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
 
+# Add endpoint for cache management
+@app.post("/admin/clear_cache")
+async def clear_cache():
+    """Clear all cached plugins (admin endpoint)"""
+    try:
+        # Import the Kernel class to access the class-level cache
+        from src.kernel.service import Kernel
+        if hasattr(Kernel, '_session_cache'):
+            Kernel._session_cache.invalidate_all()
+            return {"status": "success", "message": "All cache entries cleared"}
+        else:
+            return {"status": "info", "message": "No cache found"}
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail=f"Error clearing cache: {str(e)}")
+
+@app.get("/admin/cache_stats")
+async def get_cache_stats():
+    """Get cache statistics"""
+    try:
+        from src.kernel.service import Kernel
+        if hasattr(Kernel, '_session_cache'):
+            cache = Kernel._session_cache
+            return {
+                "cached_plugins": len(cache.plugin_cache),
+                "cached_prompts": len(cache.prompt_cache),
+                "cache_keys": list(cache.plugin_cache.keys())
+            }
+        else:
+            return {"message": "No cache found"}
+    except Exception as e:
+        logger.error(f"Error getting cache stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting cache stats: {str(e)}")
 
 @app.post("/reset_conversation")
 async def reset_conversation(request: ConversationResetRequest):

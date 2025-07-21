@@ -73,8 +73,9 @@ EBAY MARKET DATA (COMPETITIVE INTELLIGENCE):
 - ebayWT: eBay auction listings (LARGE TABLE - 2M+ records). Market pricing data.
   Key columns: OEAN, UnitPrice (nvarchar - convert to numeric for calculations), Quantity, CaptureDate, SellerID, Title, EndTime
   IMPORTANT: UnitPrice is stored as nvarchar(100) - use TRY_CONVERT(decimal(10,2), UnitPrice) for numeric operations
-- ebayWT_NF: eBay auctions for parts NOT in our inventory (competitive analysis).
-  Key columns: OEAN, DeltaSold (sales indicator), SoldDate
+- ebayWT_NF: eBay auctions for parts and OE's NOT in our inventory that are selling successfully on eBay. Does not include unit price (competitive analysis).
+  This table is used for competitive analysis of parts that we do not currently sell and represent potential market opportunities.
+  Key columns: Title, OEAN, DeltaSold (number that shows only auctions where the eBay quantity sold is increasing over time), ListingURL, SoldDate
 - eBayNF_SupplierMatch: Competitor parts with supplier matching data.
   Key columns: OEAN, SupplierName, PartDescription (NOTE: Supplier fields may be NULL)
 
@@ -108,6 +109,7 @@ SUPPLIER SOURCING DATA (INTERNAL SUPPLIER CATALOGS):
 
 PRODUCT-TO-OEAN MAPPING (ROSETTA STONE):
 - rightStock_ProductOEs: PRODUCT-TO-OEAN CROSS-REFERENCE (enables product-level intelligence).
+  This table shows our products and their OEs. Products listed in this table are OE's that we already claim and could sell.
   Key columns: [CaptureDate], [Product], [OE]
   Use to map internal products to OEANs for comprehensive market analysis
   Product mapping: SELECT [Product], [OE] FROM rightStock_ProductOEs WHERE [Product] = 'HP1000'
@@ -211,6 +213,7 @@ CRITICAL SEARCH PATTERNS:
 - Product names/descriptions often have variations (e.g., 'AAE-HPS Racks', 'AAE-HPS Pumps')
 - Use pattern: WHERE CustomerName LIKE '%AUTOZONE%' AND Product LIKE '%AAE-HPS%'
 - For product category analysis: Use ProdGroupDes LIKE '%RACK%' or '%PUMP%'
+- For potential new products to make use eBayWT_NF: Use Title LIKE '%coolant hose%' to find potential matches
 - Case insensitive searches: Use UPPER() function for consistency
 - For OEAN searches across tables: Use exact match first, then LIKE patterns if needed
 
@@ -232,7 +235,7 @@ TABLE USAGE GUIDELINES:
 - For inventory optimization → Use rightScore_results focusing on StockScore and OverallScore
 - For dead stock identification → Use rightScore_results WHERE StockScore <= 2 AND Flag3Year = 0
 - For new product tracking → Use rightScore_results WHERE Flag1Year = 1 or Flag3Year = 1
-- For market pricing questions → Use ebayWT/ebayWT_NF
+- For eBay market pricing questions → Use ebayWT and the UnitPrice field
 - For competitive analysis → Use ebayNF_SupplierMatch
 - For MSRP/list price questions → Use OEPriceBookPBI with [Part Number] searches
 - For supersession checks → Use OEPriceBookPBI [Supperseded Flag] and [Superseded Part Number]
